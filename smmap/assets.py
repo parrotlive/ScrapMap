@@ -89,6 +89,13 @@ _CATEGORY_WORDS = (
 # colour the thing reads as from a kilometre up.
 _ACCENT_WORDS = ("lamp", "light", "glow", "emissive", "stripe", "caution")
 
+# Standing liquid -- a pond in a point of interest, a chemical bath, an oil pool
+# -- is not terrain and has no collision mesh. It is a unit box whose placement
+# stretches it, usually to 64 x 64 x 16 metres, and the only thing that marks it
+# out is the material its renderable draws with.
+UNIT_BOX = np.array([(x, y, z) for x in (-0.5, 0.5) for y in (-0.5, 0.5)
+                     for z in (-0.5, 0.5)], dtype=np.float32)
+
 
 def _parse_hex_colour(s):
     s = str(s).lstrip("#")
@@ -106,6 +113,7 @@ class AssetDb(object):
         self.by_uuid = {}
         self._shapes = {}
         self._cats = {}
+        self._liquids = {}
         self._scan()
 
     # -- catalogue --------------------------------------------------------
@@ -185,6 +193,29 @@ class AssetDb(object):
             return None
         return tuple(np.asarray(cols, dtype=np.float32).mean(axis=0))
 
+    def liquid(self, uuid):
+        """True if this asset is a body of liquid rather than a solid thing."""
+        hit = self._liquids.get(uuid)
+        if hit is not None:
+            return hit
+        out = False
+        a = self.by_uuid.get(uuid)
+        if a is not None and not a.get("col"):
+            r = a.get("renderable")
+            if isinstance(r, str):
+                try:
+                    with open(self._expand(r), "rb") as f:
+                        r = json.load(f)
+                except (OSError, ValueError):
+                    r = None
+            for lod in (r or {}).get("lodList") or ():
+                subs = list((lod.get("subMeshMap") or {}).values())
+                subs += list(lod.get("subMeshList") or ())
+                out = out or any(str(s.get("material", "")).lower().startswith("water")
+                                 for s in subs)
+        self._liquids[uuid] = out
+        return out
+
     # -- collision geometry ----------------------------------------------
 
     def shape(self, uuid):
@@ -203,16 +234,20 @@ class AssetDb(object):
         path = self._expand(a["col"])
         if not os.path.isfile(path):
             return None
-        xs = []
         try:
-            with open(path, "r", errors="replace") as fh:
-                for line in fh:
-                    if line[:2] == "v ":
-                        p = line.split()
-                        if len(p) >= 4:
-                            xs.append((float(p[1]), float(p[2]), float(p[3])))
-        except Exception:
+            with open(path, "rb") as fh:
+                text = fh.read().decode("ascii", "replace")
+        except OSError:
             return None
+        xs = []
+        for line in text.splitlines():
+            if line[:2] == "v ":
+                p = line.split()
+                if len(p) >= 4:
+                    try:
+                        xs.append((float(p[1]), float(p[2]), float(p[3])))
+                    except ValueError:
+                        pass
         if not xs:
             return None
         v = np.asarray(xs, dtype=np.float32)

@@ -53,8 +53,13 @@ def decompress(src, expected=None):
             # difference between decoding hundreds of tiles in a second vs a minute.
             dst += dst[start:start + length]
         else:
-            for k in range(length):
-                dst.append(dst[start + k])
+            # Overlapping: the match reads bytes it is still writing, which is
+            # simply the last `offset` bytes repeated. Terrain is full of these
+            # -- a run of flat ground encodes as one byte at offset 1 repeated a
+            # few thousand times -- so doing it a byte at a time costs more than
+            # everything else in the tool put together.
+            unit = bytes(dst[start:])
+            dst += (unit * (length // offset + 1))[:length]
 
     if expected is not None and len(dst) != expected:
         raise ValueError("LZ4: expected %d bytes, produced %d" % (expected, len(dst)))

@@ -17,10 +17,15 @@ PAGE = """<!doctype html>
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%%; background:#11151c; color:#e8edf5;
        font:13px/1.5 "Segoe UI", system-ui, sans-serif; overflow:hidden; }
-  #stage { position:absolute; inset:0; cursor:grab; overflow:hidden; }
+  /* touch-action keeps the browser from claiming the gesture and cancelling our
+     pointer stream halfway through a drag. */
+  #stage { position:absolute; inset:0; cursor:grab; overflow:hidden;
+       touch-action:none; user-select:none; -webkit-user-select:none; }
   #stage.drag { cursor:grabbing; }
-  #map { position:absolute; transform-origin:0 0; image-rendering:pixelated;
-         will-change:transform; }
+  #view { position:absolute; left:0; top:0; }
+  #src { display:none; }
+  #wait { position:absolute; left:50%%; top:50%%; transform:translate(-50%%,-50%%);
+       color:#6d7f97; font-size:12px; letter-spacing:.3px; }
   .panel { position:absolute; background:rgba(18,23,31,.88); border:1px solid #2b3444;
        border-radius:10px; padding:10px 13px; backdrop-filter:blur(8px); }
   #info { top:12px; left:12px; max-width:330px; }
@@ -43,7 +48,9 @@ PAGE = """<!doctype html>
        border-radius:4px; padding:0 4px; font:inherit; font-size:11px; color:#dce7f5; }
 </style>
 
-<div id="stage"><img id="map" src="%(img)s" width="%(w)d" height="%(h)d" alt="world map"></div>
+<div id="stage"><canvas id="view"></canvas><div id="wait">unpacking the map&hellip;</div>
+  <img id="src" src="%(img)s" width="%(w)d" height="%(h)d"
+       alt="world map" draggable="false"></div>
 
 <div class="panel" id="info">
   <h1>%(name)s</h1>
@@ -52,7 +59,7 @@ PAGE = """<!doctype html>
 </div>
 
 <div class="panel" id="help">
-  drag to pan &middot; scroll to zoom<br><kbd>F</kbd> fit &middot; <kbd>1</kbd> 100%%
+  drag to pan &middot; scroll or double-click to zoom<br><kbd>F</kbd> fit &middot; <kbd>1</kbd> 100%%
 </div>
 
 <div class="panel" id="hud">cell <b id="cell">-</b> &nbsp; world <b id="world">-</b> &nbsp;
@@ -62,58 +69,161 @@ PAGE = """<!doctype html>
 
 <script>
 const META = %(meta)s;
-const stage = document.getElementById('stage'), map = document.getElementById('map');
-let scale = 1, tx = 0, ty = 0;
+const BG = '#11151c';
+const stage = document.getElementById('stage');
+const view = document.getElementById('view'), src = document.getElementById('src');
+const ctx = view.getContext('2d', { alpha: false });
+const cellOut = document.getElementById('cell'), worldOut = document.getElementById('world');
+const zoomOut = document.getElementById('zoom');
+let scale = 1, tx = 0, ty = 0, ready = false, mip = null, mipK = 1;
 
+/* Viewport coordinates, which is what every gesture below works in. */
+function at(e) {
+  const r = stage.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+
+/* The map is far larger than any window -- nine kilometres at two metres a
+   pixel is sixteen megapixels -- so it is never handed to the browser as one
+   transformed element. Each frame copies just the rectangle of it that is on
+   screen, which costs the same whether the world is small or huge and whatever
+   the zoom. */
+function draw() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+  if (view.width !== cw || view.height !== ch) {
+    view.width = cw; view.height = ch;
+    view.style.width = w + 'px'; view.style.height = h + 'px';
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, w, h);
+  if (!ready) return;
+  const x0 = Math.max(0, -tx / scale), y0 = Math.max(0, -ty / scale);
+  const x1 = Math.min(META.w, (w - tx) / scale), y1 = Math.min(META.h, (h - ty) / scale);
+  if (x1 <= x0 || y1 <= y0) return;
+  /* Zoomed out, sample the reduced copy: shrinking sixteen megapixels every
+     frame is the one thing here that is not cheap. */
+  const small = mip && scale <= mipK;
+  const img = small ? mip : src, k = small ? mipK : 1;
+  ctx.imageSmoothingEnabled = scale < 1;
+  ctx.drawImage(img, x0 * k, y0 * k, (x1 - x0) * k, (y1 - y0) * k,
+                tx + x0 * scale, ty + y0 * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+}
+
+/* Never draw more than once per frame however many pointer events arrive. */
+let queued = false;
+function paint() {
+  if (queued) return;
+  queued = true;
+  requestAnimationFrame(() => { queued = false; draw(); });
+}
+
+/* Always leave some of the map on screen: a pan that loses it entirely reads as
+   a broken viewer rather than as a pan. */
 function apply() {
-  map.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-  document.getElementById('zoom').textContent = Math.round(scale * 100) + '%%';
+  const w = META.w * scale, h = META.h * scale;
+  const kx = Math.min(stage.clientWidth, w) * 0.35;
+  const ky = Math.min(stage.clientHeight, h) * 0.35;
+  tx = Math.min(stage.clientWidth - kx, Math.max(kx - w, tx));
+  ty = Math.min(stage.clientHeight - ky, Math.max(ky - h, ty));
+  zoomOut.textContent = Math.round(scale * 100) + '%%';
+  paint();
 }
 function fit() {
-  const s = Math.min(stage.clientWidth / META.w, stage.clientHeight / META.h) * 0.94;
-  scale = s;
-  tx = (stage.clientWidth - META.w * s) / 2;
-  ty = (stage.clientHeight - META.h * s) / 2;
+  scale = Math.min(stage.clientWidth / META.w, stage.clientHeight / META.h) * 0.94;
+  tx = (stage.clientWidth - META.w * scale) / 2;
+  ty = (stage.clientHeight - META.h * scale) / 2;
   apply();
 }
 function zoomAt(cx, cy, factor) {
-  const ns = Math.min(24, Math.max(0.05, scale * factor));
+  const ns = Math.min(32, Math.max(0.02, scale * factor));
   tx = cx - (cx - tx) * (ns / scale);
   ty = cy - (cy - ty) * (ns / scale);
-  scale = ns; apply();
+  scale = ns;
+  apply();
+}
+function readout(x, y) {
+  const mx = (x - tx) / scale, my = (y - ty) / scale;
+  const inside = mx >= 0 && my >= 0 && mx < META.w && my < META.h;
+  cellOut.textContent = inside
+    ? `${Math.floor(mx / META.px) + META.x0}, ${META.y1 - Math.floor(my / META.px)}` : '-';
+  worldOut.textContent = inside
+    ? `${Math.round((mx / META.px + META.x0) * 64)}, ${Math.round((META.y1 + 1 - my / META.px) * 64)}` : '-';
 }
 
 stage.addEventListener('wheel', e => {
   e.preventDefault();
-  zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  /* Wheels report pixels, lines or pages; a smooth exponential of the
+     normalised delta zooms a trackpad gently and a mouse wheel briskly. */
+  const step = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+  const [x, y] = at(e);
+  zoomAt(x, y, Math.pow(0.9985, e.deltaY * step));
 }, { passive: false });
 
-let drag = null;
+let dragId = null, grabX = 0, grabY = 0;
 stage.addEventListener('pointerdown', e => {
-  drag = { x: e.clientX - tx, y: e.clientY - ty };
-  stage.classList.add('drag'); stage.setPointerCapture(e.pointerId);
-});
-stage.addEventListener('pointerup', e => {
-  drag = null; stage.classList.remove('drag');
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  dragId = e.pointerId;
+  grabX = e.clientX - tx;
+  grabY = e.clientY - ty;
+  stage.classList.add('drag');
+  stage.setPointerCapture(e.pointerId);
 });
 stage.addEventListener('pointermove', e => {
-  const r = stage.getBoundingClientRect();
-  const mx = (e.clientX - r.left - tx) / scale, my = (e.clientY - r.top - ty) / scale;
-  const cx = Math.floor(mx / META.px) + META.x0;
-  const cy = META.y1 - Math.floor(my / META.px);
-  const inside = mx >= 0 && my >= 0 && mx < META.w && my < META.h;
-  document.getElementById('cell').textContent = inside ? `${cx}, ${cy}` : '-';
-  document.getElementById('world').textContent = inside
-    ? `${Math.round((mx / META.px + META.x0) * 64)}, ${Math.round((META.y1 + 1 - my / META.px) * 64)}` : '-';
-  if (drag) { tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply(); }
+  const [x, y] = at(e);
+  if (e.pointerId === dragId) {
+    tx = e.clientX - grabX;
+    ty = e.clientY - grabY;
+    apply();
+  }
+  readout(x, y);
 });
+function release(e) {
+  if (e.pointerId !== dragId) return;
+  dragId = null;
+  stage.classList.remove('drag');
+  if (stage.hasPointerCapture(e.pointerId)) stage.releasePointerCapture(e.pointerId);
+}
+stage.addEventListener('pointerup', release);
+stage.addEventListener('pointercancel', release);
+stage.addEventListener('dblclick', e => { const [x, y] = at(e); zoomAt(x, y, 2); });
+stage.addEventListener('dragstart', e => e.preventDefault());
+addEventListener('resize', apply);
 
 addEventListener('keydown', e => {
   if (e.key === 'f' || e.key === 'F') fit();
-  if (e.key === '1') { const r = stage.getBoundingClientRect();
-    zoomAt(r.width / 2, r.height / 2, 1 / scale); }
+  if (e.key === '1') zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1 / scale);
+});
+
+function start() {
+  const f = 4;
+  if (META.w >= 512) {
+    const c = document.createElement('canvas');
+    c.width = Math.round(META.w / f);
+    c.height = Math.round(META.h / f);
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src, 0, 0, c.width, c.height);
+    mip = c;
+    mipK = c.width / META.w;
+  }
+  ready = true;
+  document.getElementById('wait').remove();
+  fit();
+  draw();   /* the first frame should not wait on a callback the browser may be
+               holding back, so paint once straight away */
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') draw();
 });
 fit();
+if (src.decode) { src.decode().then(start, start); }
+else if (src.complete) { start(); }
+else { src.addEventListener('load', start); }
 </script>
 """
 

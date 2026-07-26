@@ -13,6 +13,12 @@ so you can read a place at a glance:
 
 ![](docs/detail.png)
 
+Points of interest are drawn from their own ground data rather than from the
+coarse whole-tile grid, so a district arrives with its roads, yards and canals
+rather than as a field with some pipes in it:
+
+![](docs/poi.png)
+
 ## Why this exists
 
 The usual way to get an overview map of a survival world is a chore: back up
@@ -48,8 +54,10 @@ to zoom, `F` to fit, `1` for 100%. The readout shows cell and world coordinates
 under the cursor, which is handy for `/teleport`.
 
 Ground colours come from the game's own terrain textures, so grass, sand, dirt
-and rock read the way they do in game. Anything below the water plane is drawn as
-water, shaded by depth, and relief is hillshaded from the terrain heightmap.
+and rock read the way they do in game. Relief is hillshaded from the terrain
+heightmap. Water is anything under the world's own plane at z = 0 plus the pools
+a tile stands above it — a pond inside a hideout, the canals around the silo
+district — with chemical baths and oil pools drawn as what they are.
 
 ## Command line
 
@@ -68,7 +76,7 @@ python -m smmap --game "D:\...\Scrap Mechanic"
 ```
 
 Default is 32 px per cell — two metres per pixel, so a full world is 4608 x 3584
-and takes about seven seconds.
+and takes about twenty seconds.
 
 ## How it works
 
@@ -90,28 +98,52 @@ every cell in the world. Tile UUIDs are stored byte-reversed.
 **The terrain** comes from the game's `.tile` files (`tiles.py`). Each holds six
 LZ4-compressed LOD levels; a level is `(S/2+1)²` float32 heights followed by `S²`
 cells of eight `uint8` material weights, with S = 65 down to 3. That grid is a
-fixed 65x65 per tile whatever the tile measures on the ground, so a 64 m meadow
-is sampled every metre but a 512 m point of interest only every eight — which is
-why a map drawn from the height field alone shows an empty field where a factory
-stands.
+fixed 65x65 per tile whatever the tile measures on the ground — one sample a
+metre for a 64 m meadow, one every eight for a 512 m point of interest, and for
+the Silo District not even that: its whole-tile grid is empty.
+
+**The real ground for those** is one grid per 64 m cell, sitting base64'd and
+LZ4'd in the `.tileson`: 33x33 float32 heights, the same again for the mask the
+`.tile` keeps beside them, then 65x65x8 material weights stored plane by plane
+rather than interleaved. For a one-cell tile it reproduces the `.tile`'s own
+LOD 0 exactly, which is how the layout was pinned down; for a 512 m district it
+is sixty-four times the detail, and it is where a point of interest keeps its
+roads and its yards. Cells run x fastest — verified by the boundary samples
+neighbouring cells share, 8744 of 8744 shared edges matching exactly.
 
 **Colours** are the mean colours of the ground diffuse textures listed in
 `Data/Terrain/Materials/gnd_standard_materialset.json`, blended by weight over
 the "Grass" base the terrain falls back to where all eight weights are zero
 (`palette.py`).
 
-**The structures** are in the `.tileson` beside each `.tile`: a list of assets,
-harvestables and kinematics with a position in tile metres, an Euler rotation, a
-scale and a per-material colour map. Each one is looked up in the game's
-`.assetset` and `.harvestableset` databases, which name it and point at a
-collision mesh in plain `.obj` (`assets.py`). `detail.py` reduces that mesh to
-its extreme points, rotates and scales them into world space, and fills the
-outline they project to — deepest first, and only where the prop stands clear of
-the ground, so mine workings do not print through the mountain above them. The
-colour is the map colour for its kind — building, road, rock, plant, wreck —
-carrying 42% of the prop's own paint, which keeps a town legible instead of
-noisy. Their heights drive a rim light and a shadow, which is what makes a
-warehouse look like a warehouse from a kilometre up.
+**The structures** are in the same `.tileson`: assets, harvestables and
+kinematics with a position in tile metres, an Euler rotation, a scale and a
+per-material colour map — and nested prefabs, which is where the bulk of a place
+lives. A warehouse is one prefab, the ruined city is 124, and each `.prefab` has
+a `.prefabson` of exactly the same shape, so `props.py` walks the tree and
+flattens it into one list of world-space placements. It carries rotation and
+scale as a matrix rather than as angles, because composing a child's rotation
+with a parent's non-uniform scale does not in general give back a rotation and a
+scale. Reading only the top level draws the fences and misses the buildings:
+expanding the tree takes the ruined city from 1272 placements to 5232.
+
+Each placement is looked up in the game's `.assetset` and `.harvestableset`
+databases, which name it and point at a collision mesh in plain `.obj`
+(`assets.py`). `detail.py` reduces that mesh to its extreme points, rotates and
+scales them into world space, and fills the outline they project to — deepest
+first, and only where the prop stands clear of the ground, so mine workings do
+not print through the mountain above them. The colour is the map colour for its
+kind — building, road, rock, plant, wreck — carrying 42% of the prop's own
+paint, which keeps a town legible instead of noisy. Their heights drive a rim
+light and a shadow, which is what makes a warehouse look like a warehouse from a
+kilometre up.
+
+**Standing liquid** has no collision mesh and no shape of its own: it is a unit
+box that the placement stretches, usually to 64 x 64 x 16 metres, and the only
+thing marking it out is that its renderable draws with one of the water
+materials. Those get their own layer, and the same clearance test that hides
+buried props gives a pond its shoreline — it is liquid only where its surface
+stands above the ground it sits in.
 
 Three conventions could not simply be read off the formats, so each was settled
 by measurement rather than by guessing:
@@ -147,12 +179,19 @@ smmap/
   smlua.py          'LUA' bit-packed value decoder
   bitreader.py      MSB-first bit reader
   lz4.py            LZ4 block decompressor
-  tiles.py          .tile index, LOD decoder and .tileson prop lists
+  tiles.py          .tile index, LOD decoder, per-cell surface grids
+  props.py          .tileson / .prefabson placements, prefab trees flattened
   assets.py         asset and harvestable databases, collision meshes
-  detail.py         rasterises props into a per-tile overlay
-  palette.py        terrain colours
+  detail.py         rasterises props and pools into a per-tile overlay
+  palette.py        terrain and liquid colours
   render.py         map compositing
   viewer.py         self-contained HTML viewer
 ```
+
+The viewer never hands the whole map to the browser as one transformed element:
+sixteen megapixels of it would be a large thing to ask a compositor to scale on
+every frame of a drag. Each frame copies only the rectangle that is on screen
+into a viewport-sized canvas, which costs the same at any zoom and for any size
+of world.
 
 Saves are opened read-only and immutable; the tool never writes to them.

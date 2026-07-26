@@ -25,6 +25,14 @@ UNKNOWN_RGB = (150, 60, 150)   # a tile uuid the installed game does not have
 WATER_SHALLOW_RGB = (74, 141, 168)
 WATER_DEEP_RGB = (24, 61, 104)
 
+# A point of interest can stand its own pool above that plane, and not all of
+# them hold water. Indexed by the liquid kind detail.py records.
+LIQUID_RGB = [
+    (WATER_SHALLOW_RGB, WATER_DEEP_RGB),
+    ((140, 168, 46), (74, 100, 20)),      # chemicals
+    ((52, 46, 40), (22, 19, 16)),         # oil
+]
+
 
 def recompute_from_game(game_dir):
     """Re-derive the palette from the installed textures.
