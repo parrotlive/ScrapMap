@@ -18,6 +18,7 @@ and a 32x32 POI tile at 32 m -- which is exactly the level of detail a map wants
 
 import os
 import glob
+import json
 import struct
 
 from . import lz4
@@ -38,7 +39,8 @@ def uuid_str(raw16):
 
 
 class Tile(object):
-    __slots__ = ("path", "name", "uuid", "cells_x", "cells_y", "biome", "_lods")
+    __slots__ = ("path", "name", "uuid", "cells_x", "cells_y", "biome",
+                 "_lods", "_props")
 
     def __init__(self, path, uuid, cells_x, cells_y, biome):
         self.path = path
@@ -48,10 +50,42 @@ class Tile(object):
         self.cells_y = cells_y
         self.biome = biome
         self._lods = {}
+        self._props = None
 
     @property
     def size(self):
         return max(self.cells_x, self.cells_y, 1)
+
+    def props(self):
+        """Everything placed on this tile, from its .tileson companion file.
+
+        Assets, harvestables and kinematics share one transform layout and the
+        map does not care which list a silo or a spruce was authored in, so they
+        come back as a single list of
+
+            (uuid, position, rotation, scale, colourMap)
+
+        with the position in tile-local metres and the rotation in degrees.
+        """
+        if self._props is not None:
+            return self._props
+        out = []
+        self._props = out
+        try:
+            with open(os.path.splitext(self.path)[0] + ".tileson", "rb") as f:
+                ents = json.load(f).get("entities") or {}
+        except (OSError, ValueError):
+            return out
+        for kind in ("assets", "harvestables", "kinematics"):
+            for e in ents.get(kind) or ():
+                if e.get("hidden") or e.get("exclude") or "uuid" not in e:
+                    continue
+                t = e.get("transform") or {}
+                if not t.get("position") or not t.get("rotation"):
+                    continue
+                out.append((e["uuid"], t["position"], t["rotation"],
+                            t.get("scale") or (1.0, 1.0, 1.0), e.get("colorMap")))
+        return out
 
     def lod(self, level=0):
         """(heights, materials) as numpy arrays, decoded lazily and cached.
@@ -71,11 +105,19 @@ class Tile(object):
             f.seek(offsets[level])
             blob = f.read(csizes[level])
 
-        raw = lz4.decompress(blob, usizes[level])
-
         s = [65, 33, 17, 9, 5, 3][level]
         v = s // 2 + 1
         hbytes = v * v * 8
+        # Interior tiles -- warehouse floors and the like -- ship no terrain at
+        # all. They are never placed on the overworld, but a flat tile is a
+        # kinder answer than an exception.
+        if not csizes[level] or usizes[level] < hbytes + s * s * 8:
+            out = (np.zeros((v, v), dtype=np.float32),
+                   np.zeros((s, s, 8), dtype=np.uint8))
+            self._lods[level] = out
+            return out
+
+        raw = lz4.decompress(blob, usizes[level])
         pairs = np.frombuffer(raw[:hbytes], dtype="<u4").reshape(v * v, 2)
         heights = pairs[:, 0].copy().view("<f4").reshape(v, v)
         mats = np.frombuffer(raw[hbytes:hbytes + s * s * 8],

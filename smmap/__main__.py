@@ -10,6 +10,7 @@ import sys
 import time
 import webbrowser
 
+from . import assets
 from . import discover
 from . import palette
 from . import savefile
@@ -60,12 +61,14 @@ def main(argv=None):
     ap.add_argument("save", nargs="?",
                     help="save name or .db path (default: your most recent survival world)")
     ap.add_argument("-o", "--out", help="output file (.html or .png)")
-    ap.add_argument("--px", type=int, default=16,
-                    help="pixels per 64 m cell (default 16)")
+    ap.add_argument("--px", type=int, default=32,
+                    help="pixels per 64 m cell (default 32, so 2 m per pixel)")
     ap.add_argument("--list", action="store_true", help="list saves and exit")
     ap.add_argument("--all", action="store_true", help="render every survival save")
     ap.add_argument("--png", action="store_true", help="write a .png only")
     ap.add_argument("--no-shade", action="store_true", help="disable hillshading")
+    ap.add_argument("--no-structures", action="store_true",
+                    help="draw bare terrain, without buildings, rocks and trees")
     ap.add_argument("--no-open", action="store_true", help="do not open the result")
     ap.add_argument("--game", help="path to the Scrap Mechanic folder")
     args = ap.parse_args(argv)
@@ -94,6 +97,8 @@ def main(argv=None):
     if not index:
         return _fail("Found the game but no terrain tiles in it.",
                      "Is %s a complete install?" % game)
+
+    args.db = None if args.no_structures else assets.AssetDb(game)
 
     if args.all:
         targets = [s for s in saves if s.folder.lower() == "survival"]
@@ -147,7 +152,7 @@ def render_one(save, index, args):
         print("         %d x %d cells  (%.1f x %.1f km)  seed %s"
               % (w, h, w * 64 / 1000.0, h * 64 / 1000.0, cd.get("seed", "?")))
 
-        r = MapRenderer(cd, index, px=max(1, args.px))
+        r = MapRenderer(cd, index, px=max(1, args.px), asset_db=args.db)
 
         # Only animate a progress line on a real console; piped output should
         # not fill up with carriage returns.
@@ -216,6 +221,8 @@ def _write_viewer(path, img, r, cd, info, save):
         ("tiles", "%d cells, %d kinds" % (sum(r.used.values()), len(r.used))),
         ("saved", _human_age(save.mtime)),
     ]
+    if r.props:
+        stats.append(("structures", "%s drawn" % format(r.props, ",d")))
     tick = info.get("gametick")
     if isinstance(tick, int) and tick > 0:
         stats.insert(5, ("played", "%.1f h" % (tick / 40.0 / 3600.0)))  # 40 ticks/s
@@ -226,10 +233,14 @@ def _write_viewer(path, img, r, cd, info, save):
         ("Grass", palette.BASE_RGB),
         ("Sand", palette.MATERIAL_RGB[1]),
         ("Dirt", palette.MATERIAL_RGB[3]),
-        ("Rock", palette.MATERIAL_RGB[5]),
         ("Water", palette.WATER_SHALLOW_RGB),
         ("Deep water", palette.WATER_DEEP_RGB),
     ]
+    if r.props:
+        legend += [("Buildings", assets.CATEGORY_RGB["build"]),
+                   ("Roads", assets.CATEGORY_RGB["road"]),
+                   ("Rocks", assets.CATEGORY_RGB["rock"]),
+                   ("Trees", assets.CATEGORY_RGB["plant"])]
     meta = {"w": img.width, "h": img.height, "px": r.px,
             "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}
     subtitle = "Scrap Mechanic survival world  ·  1 cell = 64 m"
