@@ -2,8 +2,11 @@
 
 Makes a top-down map of your Scrap Mechanic survival world.
 
-**Double-click `Make map.bat`.** That's it. It finds the game, finds your saves,
-picks the world you played last, renders it and opens it in your browser.
+**Double-click `Make map.bat`.** A window opens with your worlds already in it,
+the one you played last picked out. Press **Make map** and it renders and opens
+in your browser. Nothing to find, nothing to configure.
+
+![](docs/gui.png)
 
 ![](docs/example.png)
 
@@ -39,12 +42,24 @@ own data, so there is no such thing as a missing tile.
 | Move files by hand     | yes (`cells.json`)      | no                  |
 | Web server             | yes, or hand-inline it  | no, one HTML file   |
 | Tiles without art      | drawn blank             | always drawn        |
-| Steps for the user     | ~7                      | 1 (double-click)    |
+| Steps for the user     | ~7                      | double-click, press one button |
 
 ## Requirements
 
 Windows with Scrap Mechanic installed, and Python 3.8+. The launcher installs
-`numpy` and `Pillow` on first run if they are missing.
+`numpy` and `Pillow` on first run if they are missing. The window needs tkinter,
+which comes with Python on Windows; without it the launcher renders straight to
+a file instead.
+
+## The window
+
+Every save on the PC, newest first, with the one you last played picked out.
+Detail runs from quick (4 m per pixel) through normal to fine (1 m per pixel,
+about a minute and a half for a full world); you can turn off the structures or
+the shading, write a plain image instead of a page, and choose where it lands.
+Pick several worlds and it does them one after another. It tells you roughly how
+long it will take before you start, how far along it is while it runs, and the
+same button stops it.
 
 ## Output
 
@@ -55,9 +70,10 @@ under the cursor, which is handy for `/teleport`.
 
 Ground colours come from the game's own terrain textures, so grass, sand, dirt
 and rock read the way they do in game. Relief is hillshaded from the terrain
-heightmap. Water is anything under the world's own plane at z = 0 plus the pools
-a tile stands above it — a pond inside a hideout, the canals around the silo
-district — with chemical baths and oil pools drawn as what they are.
+heightmap. Water is drawn where the world actually has water and nowhere else —
+the sea, every lake, the pond inside a hideout, the canals around the silo
+district — with chemical baths and oil pools drawn as what they are, and a dry
+pit like the excavation mine left dry however far below the sea it goes.
 
 ## Command line
 
@@ -65,12 +81,13 @@ Not required, but it's there:
 
 ```
 python -m smmap                  # newest survival world -> HTML, opens it
+python -m smmap --gui            # the window
 python -m smmap --list           # show every save it found
 python -m smmap "cock"           # a world by name (substring is fine)
 python -m smmap --all            # every survival world
 python -m smmap --png            # PNG instead of HTML
 python -m smmap --px 64          # 64 px per 64 m cell (one metre per pixel)
-python -m smmap --no-structures  # bare terrain
+python -m smmap --no-structures  # bare terrain, still with its water
 python -m smmap --no-shade       # flat colours, no hillshading
 python -m smmap --game "D:\...\Scrap Mechanic"
 ```
@@ -138,12 +155,34 @@ paint, which keeps a town legible instead of noisy. Their heights drive a rim
 light and a shadow, which is what makes a warehouse look like a warehouse from a
 kilometre up.
 
-**Standing liquid** has no collision mesh and no shape of its own: it is a unit
-box that the placement stretches, usually to 64 x 64 x 16 metres, and the only
-thing marking it out is that its renderable draws with one of the water
-materials. Those get their own layer, and the same clearance test that hides
-buried props gives a pond its shoreline — it is liquid only where its surface
-stands above the ground it sits in.
+**Water** is not a plane at sea level. There is no sea plane: the ocean, every
+lake and every pond is a box some tile places, and its surface is the top of
+that box — `waterLevel = height + scaleZ * 0.5` in the game's own
+`terrain_util2.lua`. Ocean and lake tiles put a 64 x 64 box over each of their
+cells with its top at −2 m; a point of interest up on a plateau carries its
+canals at whatever height it stands. Such a box has no collision mesh and no
+shape of its own, and the only thing marking it out is that its renderable draws
+with a water material — seven assets do, from `water` through `oil` and
+`chemicals` to `sewerwater`.
+
+Drawing water wherever the ground falls below zero instead looks right at a
+glance and is wrong everywhere: ordinary meadow, forest and field tiles ripple a
+metre or so either side of zero, so a fifth of every one of them floods. One
+world came out with 3905 separate bodies of water, 1627 of them four pixels or
+smaller; going by the volumes it has 164, of which 31 are that small. It cuts
+the other way too — the excavation mine descends 95 m below the sea and is bone
+dry, because nothing ever put water in it.
+
+A body of liquid stops at whatever comes up through it, which is what gives a
+pond its shoreline and lets a pier, a canopy or a silo stand in the water rather
+than under it. That test needs a prop's height, and a prop's height is a single
+number for the whole of it — fine for a silo, wrong for the rock a lake is a
+hollow in, which is a bowl forty metres across whose rim breaks the surface. Its
+outline covers the lake, so its rim height drains the lake. Comparing the water
+surface against the middle of a prop rather than its top tells a pier from a
+basin. Ground lying under a water surface and drawn dry anyway falls from 2.0%
+of the map to 1.0%, and what is left of that is the mine, the sunken forest
+basins and the tree canopies that really do hang over the water.
 
 Three conventions could not simply be read off the formats, so each was settled
 by measurement rather than by guessing:
@@ -173,7 +212,9 @@ tiles.
 ```
 Make map.bat        double-click launcher
 smmap/
-  __main__.py       CLI, discovery, output
+  __main__.py       command line
+  gui.py            the window
+  output.py         writes the page or the image, for both of the above
   discover.py       finds Steam, the game and your saves
   savefile.py       save database reader
   smlua.py          'LUA' bit-packed value decoder

@@ -31,6 +31,15 @@ def _orient(block, rotation):
     return b
 
 
+def _tally(counts, block):
+    """Count up the liquid levels in one cell, to a centimetre."""
+    vals, n = np.unique(block, return_counts=True)
+    for v, c in zip(vals.tolist(), n.tolist()):
+        if v > NO_LIQUID:
+            key = round(v, 2)
+            counts[key] = counts.get(key, 0) + c
+
+
 def _smooth(a, passes=1):
     """Cheap separable box blur, used only to condition the hillshade input."""
     for _ in range(passes):
@@ -68,7 +77,8 @@ def _resample(grid, d):
 
 
 class MapRenderer(object):
-    def __init__(self, cell_data, tile_index, px=32, asset_db=None):
+    def __init__(self, cell_data, tile_index, px=32, asset_db=None,
+                 structures=True):
         self.cd = cell_data
         self.tiles = tile_index
         self.px = px
@@ -77,10 +87,14 @@ class MapRenderer(object):
         self.y0, self.y1 = int(b["yMin"]), int(b["yMax"])
         self.w = self.x1 - self.x0 + 1
         self.h = self.y1 - self.y0 + 1
-        self.baker = DetailBaker(asset_db, px) if asset_db is not None else None
+        self.baker = (DetailBaker(asset_db, px, structures)
+                      if asset_db is not None else None)
+        self.structures = structures and asset_db is not None
         self.missing = set()
         self.used = {}
         self.props = 0
+        self.empty = []
+        self.water_mask = None
 
     # -- per-tile data ----------------------------------------------------
 
@@ -183,6 +197,7 @@ class MapRenderer(object):
         yoff = self.cd.get("yOffset") or {}
         px = self.px
         groups = {}
+        self.empty = []
         for j in range(self.h):
             cy = self.y0 + j
             urow = uid.get(cy) or {}
@@ -193,6 +208,7 @@ class MapRenderer(object):
                 cx = self.x0 + i
                 u = urow.get(cx)
                 if not isinstance(u, Uuid) or u.is_nil():
+                    self.empty.append((i, j))
                     continue
                 tile = self.tiles.get(u)
                 if tile is None:
@@ -213,8 +229,9 @@ class MapRenderer(object):
         img[:] = palette.BASE_RGB
         # Cells with no tile are open sea; give them a depth so they shade like it.
         hmap = np.full(img.shape[:2], -12.0, dtype=np.float32)
-        top = np.zeros(img.shape[:2], dtype=np.float32) if self.baker else None
-        # Standing liquid placed by a tile, on top of the world's plane at z=0.
+        top = np.zeros(img.shape[:2], dtype=np.float32) if self.structures else None
+        # Every drop of water in the world is a volume some tile places, so this
+        # is the whole of it: the surface height wherever there is one at all.
         pools = np.full(img.shape[:2], NO_LIQUID, np.float32) if self.baker else None
         kinds = np.zeros(img.shape[:2], np.uint8) if self.baker else None
 
@@ -222,6 +239,9 @@ class MapRenderer(object):
         groups = self._placements(img)
         total = sum(len(v) for v in groups.values())
         done = 0
+        # Only worth counting up the world's water levels if something is going
+        # to ask what the sea level is.
+        levels = {} if (self.empty and pools is not None) else None
 
         t = np.linspace(0.0, 1.0, px, dtype=np.float32)
         ty, tx = t[::-1][:, None], t[None, :]
@@ -251,26 +271,35 @@ class MapRenderer(object):
                         e01 * (1 - tx) * ty + e11 * tx * ty)
                 hmap[iy:iy + px, ix:ix + px] = _orient(ground[cut], r) + base
 
-                if overlay is not None:
+                if overlay is None:
+                    continue
+                if overlay.cover is not None:
                     a = _orient(overlay.cover[cut], r)[:, :, None]
                     dst = img[iy:iy + px, ix:ix + px]
                     dst *= 1.0 - a
                     dst += _orient(overlay.rgb[cut], r) * a
                     top[iy:iy + px, ix:ix + px] = _orient(overlay.top[cut], r)
-                    if overlay.surface is not None:
-                        pools[iy:iy + px, ix:ix + px] = \
-                            _orient(overlay.surface[cut], r) + base
-                        kinds[iy:iy + px, ix:ix + px] = _orient(overlay.kind[cut], r)
+                if overlay.surface is not None:
+                    here = _orient(overlay.surface[cut], r) + base
+                    pools[iy:iy + px, ix:ix + px] = here
+                    kinds[iy:iy + px, ix:ix + px] = _orient(overlay.kind[cut], r)
+                    if levels is not None:
+                        _tally(levels, here)
 
             done += len(cells)
             if progress:
                 progress(done, total)
 
         self.height_map = hmap
-        # The world has a water plane at z = 0; a tile may stand its own ponds
-        # and chemical baths above that, which is the only water a point of
-        # interest up on a plateau ever has.
-        level = 0.0 if pools is None else np.maximum(pools, 0.0)
+        # Water is only ever where a tile puts it. The one exception is a cell
+        # the save has no tile for at all, which is open sea outside the world:
+        # flood it to whatever level most of this world's water stands at.
+        if pools is not None and self.empty and levels:
+            sea = max(levels, key=levels.get)
+            for i, j in self.empty:
+                iy, ix = (self.h - 1 - j) * px, i * px
+                pools[iy:iy + px, ix:ix + px] = sea
+        level = 0.0 if pools is None else pools
 
         if hillshade:
             # Cell elevation is interpolated per cell, so its slope steps at every
@@ -312,11 +341,16 @@ class MapRenderer(object):
         img *= (1.0 - 0.3 * shadow)[:, :, None]
 
     def _apply_water(self, img, hmap, top, level, kinds=None):
-        """Everything the water level covers is drawn as liquid, shaded by depth."""
+        """Everything a liquid surface covers is drawn as liquid, shaded by depth.
+
+        ``level`` is that surface per pixel, and it is well below anything at all
+        where no tile placed water, so dry land can never come out under it.
+        """
         wet = hmap < level
         if top is not None:
             # A pier or a silo standing in a lake is not itself underwater.
             wet &= (hmap + top) < level
+        self.water_mask = wet
         if not wet.any():
             return img
         depth = np.clip((level - hmap) / 14.0, 0.0, 1.0)[:, :, None]

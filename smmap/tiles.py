@@ -101,10 +101,12 @@ class Tile(object):
                 cells = ((doc.get("terrain") or {}).get("surface") or {}).get("cells") or []
             except (OSError, ValueError):
                 pass
-            n = self.size
-            self._cells = cells if len(cells) == n * n else []
+            want = max(self.cells_x, 1) * max(self.cells_y, 1)
+            self._cells = cells if len(cells) == want else []
             cells = self._cells
-        i = oy * self.size + ox
+        if ox >= self.cells_x or oy >= self.cells_y:
+            return None
+        i = oy * max(self.cells_x, 1) + ox
         if i >= len(cells):
             return None
         try:

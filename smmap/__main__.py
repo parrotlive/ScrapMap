@@ -12,9 +12,10 @@ import webbrowser
 
 from . import assets
 from . import discover
-from . import palette
+from . import output
 from . import savefile
 from . import tiles
+from .output import human_age as _human_age
 from .render import MapRenderer
 
 
@@ -23,17 +24,6 @@ def _fail(msg, hint=None):
     if hint:
         print("  %s" % hint)
     return 2
-
-
-def _human_age(ts):
-    if not ts:
-        return "unknown"
-    d = time.time() - ts
-    for unit, n in (("day", 86400), ("hour", 3600), ("minute", 60)):
-        if d >= n:
-            v = int(d // n)
-            return "%d %s%s ago" % (v, unit, "s" if v != 1 else "")
-    return "just now"
 
 
 def pick_save(saves, wanted=None):
@@ -71,7 +61,16 @@ def main(argv=None):
                     help="draw bare terrain, without buildings, rocks and trees")
     ap.add_argument("--no-open", action="store_true", help="do not open the result")
     ap.add_argument("--game", help="path to the Scrap Mechanic folder")
+    ap.add_argument("--gui", action="store_true",
+                    help="open the window instead of rendering straight away")
     args = ap.parse_args(argv)
+
+    if args.gui:
+        from . import gui
+        if gui.run():
+            return 0
+        print("\n  This Python has no tkinter, so there is no window to open.")
+        print("  Carrying on without it.")
 
     print("\n  Scrap Mechanic map")
 
@@ -98,7 +97,10 @@ def main(argv=None):
         return _fail("Found the game but no terrain tiles in it.",
                      "Is %s a complete install?" % game)
 
-    args.db = None if args.no_structures else assets.AssetDb(game)
+    # The asset database is loaded even without structures: the world's water is
+    # placed as assets too, and a map with no sea would be a stranger answer
+    # than one with no buildings.
+    args.db = assets.AssetDb(game)
 
     if args.all:
         targets = [s for s in saves if s.folder.lower() == "survival"]
@@ -152,7 +154,8 @@ def render_one(save, index, args):
         print("         %d x %d cells  (%.1f x %.1f km)  seed %s"
               % (w, h, w * 64 / 1000.0, h * 64 / 1000.0, cd.get("seed", "?")))
 
-        r = MapRenderer(cd, index, px=max(1, args.px), asset_db=args.db)
+        r = MapRenderer(cd, index, px=max(1, args.px), asset_db=args.db,
+                        structures=not args.no_structures)
 
         # Only animate a progress line on a real console; piped output should
         # not fill up with carriage returns.
@@ -180,71 +183,17 @@ def render_one(save, index, args):
         if base:
             root, ext = os.path.splitext(base)
         else:
-            root, ext = os.path.join(os.getcwd(), _safe(save.name) + "_map"), ""
+            root, ext = os.path.join(os.getcwd(),
+                                     output.safe_name(save.name) + "_map"), ""
         want_png = args.png or ext.lower() == ".png"
-
-        if want_png:
-            path = root + ".png"
-            img.save(path, optimize=True)
-        else:
-            path = root + ".html"
-            _write_viewer(path, img, r, cd, info, save)
+        path = root + (".png" if want_png else ".html")
+        output.write_map(path, img, r, cd, info, save, png=want_png)
 
         print("         %s  (%d x %d)" % (path, img.width, img.height))
         if r.missing:
             print("         note: %d tile id(s) not in this install were drawn purple"
                   % len(r.missing))
         return path
-
-
-def _safe(name):
-    return "".join(c if c.isalnum() or c in " ._-" else "_" for c in name).strip() or "world"
-
-
-def _write_viewer(path, img, r, cd, info, save):
-    from . import viewer
-
-    biomes = {}
-    for tname, n in r.used.items():
-        biomes[tname] = n
-    top = sorted(r.used.items(), key=lambda kv: -kv[1])[:1]
-
-    # "Land" means above the water plane -- ocean cells do carry lake tiles, so
-    # counting placed tiles would just say 100%.
-    dry = float((r.height_map >= 0).mean())
-    km2 = r.w * r.h * (64 * 64) / 1e6
-    stats = [
-        ("size", "%d x %d cells" % (r.w, r.h)),
-        ("area", "%.1f x %.1f km" % (r.w * 64 / 1000.0, r.h * 64 / 1000.0)),
-        ("seed", cd.get("seed", "?")),
-        ("land", "%.0f%% (%.1f km²)" % (100.0 * dry, km2 * dry)),
-        ("tiles", "%d cells, %d kinds" % (sum(r.used.values()), len(r.used))),
-        ("saved", _human_age(save.mtime)),
-    ]
-    if r.props:
-        stats.append(("structures", "%s drawn" % format(r.props, ",d")))
-    tick = info.get("gametick")
-    if isinstance(tick, int) and tick > 0:
-        stats.insert(5, ("played", "%.1f h" % (tick / 40.0 / 3600.0)))  # 40 ticks/s
-    if top:
-        stats.append(("most common", top[0][0]))
-
-    legend = [
-        ("Grass", palette.BASE_RGB),
-        ("Sand", palette.MATERIAL_RGB[1]),
-        ("Dirt", palette.MATERIAL_RGB[3]),
-        ("Water", palette.WATER_SHALLOW_RGB),
-        ("Deep water", palette.WATER_DEEP_RGB),
-    ]
-    if r.props:
-        legend += [("Buildings", assets.CATEGORY_RGB["build"]),
-                   ("Roads", assets.CATEGORY_RGB["road"]),
-                   ("Rocks", assets.CATEGORY_RGB["rock"]),
-                   ("Trees", assets.CATEGORY_RGB["plant"])]
-    meta = {"w": img.width, "h": img.height, "px": r.px,
-            "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}
-    subtitle = "Scrap Mechanic survival world  ·  1 cell = 64 m"
-    viewer.write_html(path, img, meta, stats, legend, save.name, subtitle)
 
 
 if __name__ == "__main__":
