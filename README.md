@@ -24,25 +24,33 @@ rather than as a field with some pipes in it:
 
 ## Why this exists
 
-The usual way to get an overview map of a survival world is a chore: back up
-your save, download a repo, paste a block of Lua into the game's
-`terrain_overworld.lua`, overwrite `tile_database.lua`, launch the game, load the
-world so it dumps a `cells.json`, copy that file into an `html/assets/json`
-folder, then serve the page — and any tile nobody has screenshotted yet shows up
-blank.
+Scrap Mechanic already has map tools, and good ones. The `cells.json` mappers
+are how most people first saw their world from above, and the hand-made tile art
+in them is lovely — someone sat down and drew every one of those tiles. This is
+not meant to replace them or to compete with them. It takes a different road to
+the same place, and the two are worth having for different reasons.
 
-This tool reads the save file directly. Nothing is patched, the game never has to
-run, and both the terrain and everything standing on it are drawn from the game's
-own data, so there is no such thing as a missing tile.
+Those tools ask the game what it generated: you patch `terrain_overworld.lua`
+and `tile_database.lua`, load the world once so it writes a `cells.json`, and the
+page draws that dump against a library of tile images.
 
-|                        | usual map tool          | this                |
-| ---------------------- | ----------------------- | ------------------- |
-| Edit game files        | yes, two of them        | no                  |
-| Launch the game        | yes, and load the world | no                  |
-| Move files by hand     | yes (`cells.json`)      | no                  |
-| Web server             | yes, or hand-inline it  | no, one HTML file   |
-| Tiles without art      | drawn blank             | always drawn        |
-| Steps for the user     | ~7                      | double-click, press one button |
+This one never runs the game. It reads the save and the game's own data files —
+the terrain heightmaps, the material weights, the asset meshes — and draws the
+ground and everything standing on it from those. Which buys less setup and a
+tile for every tile, and costs the character of artwork someone chose by hand:
+what you get here is computed, not drawn.
+
+|                     | `cells.json` mappers          | this                            |
+| ------------------- | ----------------------------- | ------------------------------- |
+| Reads               | a dump from the running game  | the save and the game's files   |
+| Setup               | patch two Lua files, load once | none                           |
+| Look                | hand-drawn tile art           | computed from textures and meshes |
+| Coverage            | the tiles that have art       | every tile in the world         |
+| Serving             | a web server, or inline it     | one self-contained HTML file    |
+
+If you want a map that looks the way an artist meant it to, use those. If you
+want one that shows exactly what the generator put in your world, without setting
+anything up, this is that.
 
 ## Requirements
 
