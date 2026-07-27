@@ -58,7 +58,7 @@ python build_exe.py
 ```
 
 That makes a throwaway virtual environment under `build/`, fetches PyInstaller
-into it and cuts a 28 MB `ScrapMap.exe` from it, which opens its window about
+into it and cuts a 30 MB `ScrapMap.exe` from it, which opens its window about
 two seconds after you double-click it. Nothing is installed into the Python you
 use, and the environment it is cut from holds only what the tool imports.
 
