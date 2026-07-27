@@ -2,9 +2,9 @@
 
 Makes a top-down map of your Scrap Mechanic survival world.
 
-**Double-click `Make map.bat`.** A window opens with your worlds already in it,
+**Double-click `ScrapMap.exe`.** A window opens with your worlds already in it,
 the one you played last picked out. Press **Make map** and it renders and opens
-in your browser. Nothing to find, nothing to configure.
+in your browser. Nothing to install, nothing to find, nothing to configure.
 
 ![](docs/gui.png)
 
@@ -46,10 +46,21 @@ own data, so there is no such thing as a missing tile.
 
 ## Requirements
 
-Windows with Scrap Mechanic installed, and Python 3.8+. The launcher installs
-`numpy` and `Pillow` on first run if they are missing. The window needs tkinter,
-which comes with Python on Windows; without it the launcher renders straight to
-a file instead.
+Windows, and Scrap Mechanic installed. `ScrapMap.exe` carries its own Python,
+numpy and Pillow, so there is nothing else to install.
+
+To run it from the source instead, you need Python 3.8+ and you double-click
+`Make map.bat`, which installs `numpy` and `Pillow` the first time if they are
+missing. To build the executable yourself:
+
+```
+python build_exe.py
+```
+
+That makes a throwaway virtual environment under `build/`, fetches PyInstaller
+into it and cuts a 28 MB `ScrapMap.exe` from it, which opens its window about
+two seconds after you double-click it. Nothing is installed into the Python you
+use, and the environment it is cut from holds only what the tool imports.
 
 ## The window
 
@@ -63,10 +74,10 @@ same button stops it.
 
 ## Output
 
-`<world>_map.html` next to the tool — a single self-contained file (the image is
-embedded, so you can move it anywhere or send it to someone). Drag to pan, scroll
-to zoom, `F` to fit, `1` for 100%. The readout shows cell and world coordinates
-under the cursor, which is handy for `/teleport`.
+`<world>_map.html` beside `ScrapMap.exe` — a single self-contained file (the
+image is embedded, so you can move it anywhere or send it to someone). Drag to
+pan, scroll to zoom, `F` to fit, `1` for 100%. The readout shows cell and world
+coordinates under the cursor, which is handy for `/teleport`.
 
 Ground colours come from the game's own terrain textures, so grass, sand, dirt
 and rock read the way they do in game. Relief is hillshaded from the terrain
@@ -77,13 +88,14 @@ pit like the excavation mine left dry however far below the sea it goes.
 
 ## Command line
 
-Not required, but it's there:
+Not required, but it's there — the executable is the same program, so
+`ScrapMap.exe --list` works exactly like `python -m smmap --list`:
 
 ```
 python -m smmap                  # newest survival world -> HTML, opens it
 python -m smmap --gui            # the window
 python -m smmap --list           # show every save it found
-python -m smmap "cock"           # a world by name (substring is fine)
+python -m smmap "My World"       # a world by name (substring is fine)
 python -m smmap --all            # every survival world
 python -m smmap --png            # PNG instead of HTML
 python -m smmap --px 64          # 64 px per 64 m cell (one metre per pixel)
@@ -93,7 +105,7 @@ python -m smmap --game "D:\...\Scrap Mechanic"
 ```
 
 Default is 32 px per cell — two metres per pixel, so a full world is 4608 x 3584
-and takes about twenty seconds.
+and takes about ten seconds.
 
 ## How it works
 
@@ -210,11 +222,14 @@ tiles.
 ## Layout
 
 ```
-Make map.bat        double-click launcher
+ScrapMap.exe        the whole thing in one file (built by build_exe.py)
+Make map.bat        double-click launcher, for running from the source
+build_exe.py        packs it into the executable
 smmap/
+  app.py            where the packaged program starts
   __main__.py       command line
   gui.py            the window
-  output.py         writes the page or the image, for both of the above
+  output.py         writes the page or the image, for all of the above
   discover.py       finds Steam, the game and your saves
   savefile.py       save database reader
   smlua.py          'LUA' bit-packed value decoder

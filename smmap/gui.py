@@ -2,7 +2,8 @@
 
 It does exactly what the command line does and writes exactly the same file; all
 it adds is somewhere to see the worlds you have, somewhere to put the options,
-and a progress bar, since a full world takes the better part of a minute.
+and a progress bar, since a full world is ten seconds at the usual detail and
+forty at the finest.
 
 The render runs on a worker thread and talks back through a queue, because
 tkinter may only be touched from the thread that made the window, and a frozen
@@ -123,8 +124,7 @@ class App(object):
         row = ttk.Frame(opts)
         row.pack(fill="x", padx=10, pady=(4, 10))
         ttk.Label(row, text="Save in").pack(side="left")
-        self.folder = tk.StringVar(value=os.path.abspath(
-            os.path.join(os.path.dirname(__file__), os.pardir)))
+        self.folder = tk.StringVar(value=output.default_folder())
         ttk.Entry(row, textvariable=self.folder).pack(
             side="left", fill="x", expand=True, padx=8)
         ttk.Button(row, text="Browse", width=9,

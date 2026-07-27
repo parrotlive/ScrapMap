@@ -158,9 +158,10 @@ def render_one(save, index, args):
                         structures=not args.no_structures)
 
         # Only animate a progress line on a real console; piped output should
-        # not fill up with carriage returns.
+        # not fill up with carriage returns, and a windowed build may have no
+        # stdout at all.
         progress = None
-        if sys.stdout.isatty():
+        if sys.stdout is not None and sys.stdout.isatty():
             last = [-1]
 
             def progress(done, total):

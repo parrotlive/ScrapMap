@@ -4,3 +4,10 @@ __pycache__/
 # Generated maps
 *_map.html
 *_map.png
+
+# build_exe.py: the build environment, PyInstaller's scratch, and the 28 MB
+# executable itself. Ship that as a release asset, not in the history.
+build/
+dist/
+*.spec
+ScrapMap.exe

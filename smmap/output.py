@@ -5,11 +5,24 @@ is the same page.
 """
 
 import os
+import sys
 import time
 
 from . import assets
 from . import palette
 from . import viewer
+
+
+def default_folder():
+    """Where a map lands if nobody says otherwise: next to the tool.
+
+    Packaged, "the tool" is the executable. It is emphatically not the folder
+    this file is in, which in a one-file build is a temporary directory that is
+    deleted the moment the program exits, taking the map with it.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 
 def human_age(ts):
