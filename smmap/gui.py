@@ -125,10 +125,11 @@ class App(object):
 
         row = ttk.Frame(opts)
         row.pack(fill="x", padx=10, pady=2)
+        self.objects = tk.BooleanVar(value=True)
         ttk.Checkbutton(row, text="In 3D, to fly around", variable=self.three_d,
                         command=self._exclusive).pack(side="left")
-        ttk.Label(row, foreground="#5a6472",
-                  text="the same map, standing up").pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(row, text="with every object as itself",
+                        variable=self.objects).pack(side="left", padx=(16, 0))
 
         row = ttk.Frame(opts)
         row.pack(fill="x", padx=10, pady=(4, 10))
@@ -233,7 +234,8 @@ class App(object):
         opts = dict(px=DETAILS[self.detail.get()][1],
                     structures=self.structures.get(),
                     shade=self.shade.get(), png=self.png.get(),
-                    three_d=self.three_d.get(), folder=folder)
+                    three_d=self.three_d.get(), objects=self.objects.get(),
+                    folder=folder)
         self.worker = threading.Thread(target=self._work, args=(saves, opts),
                                        daemon=True)
         self.worker.start()
@@ -292,7 +294,16 @@ class App(object):
                     path = output.default_path(opts["folder"], save.name,
                                                opts["png"], opts["three_d"])
                     if opts["three_d"]:
-                        output.write_map3d(path, r, cd, info, save)
+                        def stand(a, b, base=base, span=span, name=save.name):
+                            self._check()
+                            self._post("progress",
+                                       (base + span * (0.92 + 0.06 * a / max(b, 1)),
+                                        "standing up %s  %d%%"
+                                        % (name, 100 * a // max(b, 1))))
+
+                        output.write_map3d(path, r, cd, info, save, db=db,
+                                           objects=opts["objects"],
+                                           progress=stand)
                     else:
                         img = Image.fromarray(arr)
                         output.write_map(path, img, r, cd, info, save,

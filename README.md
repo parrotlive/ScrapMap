@@ -106,17 +106,44 @@ detail comes down for a slower machine.
 
 It is the same render, taken a step earlier. The flat map spends the world's
 height on shading it into a picture; the 3D page keeps the height and lets the
-graphics card do the shading instead. So the ground colour goes up as a texture
-and the ground itself as a mesh, with the buildings, rocks and trees standing on
-it at the height they really stand — a warehouse is a box you can walk round
-rather than a bright edge and a shadow. Water is a surface at the level the
-tiles put it, cut off exactly where the land comes up through it, and the
-shadows are cast by the terrain rather than drawn on, so moving the sun moves
-them.
+graphics card do the shading instead. The ground colour goes up as a texture and
+the ground itself as a mesh, built from the heightmaps the tiles carry — which
+is the same data the game builds its ground from, at two metres a sample.
+Water is a surface at the level the tiles put it, cut off exactly where the land
+comes up through it, and the shadows are cast by the terrain rather than drawn
+on, so moving the sun moves them.
 
-One self-contained file again, and about the same size: a full world is under
-3 MB with everything in it. It needs WebGL 2, which every current browser has;
-the flat map needs nothing.
+### Every object as itself
+
+What stands on the ground is not relief in a heightmap. Every object the world
+generator placed goes in as its own geometry, at its own place, size and angle:
+a warehouse is a box you can walk round, a silo is a cylinder twenty-six metres
+up, a district reads as a district from the ground rather than only from above.
+
+The shapes are the game's **collision meshes** — the plain `.obj` beside every
+asset in its catalogue, which is what the game itself collides against. They are
+not the art it draws: no textures, fewer faces, and a tree is a trunk and a cone
+rather than every leaf. Drawing what the game draws would mean decoding its own
+binary mesh format, which this does not do. What is here is the real shape of
+the real object in the real place, painted the colour the placement says it is.
+
+Meshes are shared and placements are not, which is what makes it affordable: a
+world uses a few hundred distinct assets and stands a few hundred thousand of
+them about, so each mesh goes up once and each object costs a transform, a
+colour and a size — thirty-six bytes. Size is also what decides how far away it
+is worth drawing, so a warehouse carries for kilometres and a bush does not,
+and that is the whole of the level of detail.
+
+`--objects N` caps how many are carried, biggest first, because this is the one
+part of the page that does not fit in a couple of megabytes: about a megabyte
+and a half of file per ten thousand objects. The default of 400,000 keeps every
+building, ruin, rock and tree in a world and spends what it drops on the
+smallest scattered undergrowth; `--objects 0` carries all of them and `--no-objects`
+carries none, putting the props back into the ground as relief the way the flat
+map does. Objects do not cast shadows on each other — their shadows on the
+ground come from the same height field the terrain's do.
+
+It needs WebGL 2, which every current browser has; the flat map needs nothing.
 
 ## Command line
 
@@ -131,6 +158,8 @@ python -m smmap "My World"       # a world by name (substring is fine)
 python -m smmap --all            # every survival world
 python -m smmap --png            # PNG instead of HTML
 python -m smmap --3d             # the world in 3D, to fly around
+python -m smmap --3d --objects 0 # ...carrying every last object, at any size
+python -m smmap --3d --no-objects  # ...with the props left in the ground
 python -m smmap --px 64          # 64 px per 64 m cell (one metre per pixel)
 python -m smmap --no-structures  # bare terrain, still with its water
 python -m smmap --no-shade       # flat colours, no hillshading
@@ -276,6 +305,7 @@ smmap/
   render.py         map compositing
   viewer.py         self-contained HTML viewer
   terrain3d.py      packs a render's heights and colour into GPU textures
+  objects3d.py      collision meshes and world-space instances for the 3D view
   viewer3d.py       self-contained WebGL viewer
 ```
 
@@ -293,6 +323,20 @@ the card. Height goes up as a 16-bit number split across two channels of an
 ordinary image, which is why it is the one thing in the page that must stay a
 PNG: it is data, not a picture, and there is no visually identical smaller
 version of it. Shadows are traced once into an offscreen texture when the sun
-moves rather than marched again for every pixel of every frame.
+moves rather than marched again for every pixel of every frame — twice over, in
+fact, into two channels: one walk counts the props as part of the ground, which
+is what puts a building's shadow on the grass beside it, and one counts only the
+land, because a building stands inside its own footprint and would otherwise be
+in its own shadow.
+
+The objects reach the page through the same placement reader the flat map uses.
+`props.py` already flattens a tile's prefab tree into world-space placements, so
+`objects3d.py` walks the same cell-to-tile map `render.py` built, turns each
+tile-local position through the cell's own quarter turn — the point-wise version
+of the block rotation the flat map applies to samples — and lifts it onto the
+save's corner elevations. `assets.py` was already opening every collision `.obj`
+to find a prop's footprint and keeping only its extreme points; it now keeps the
+faces too, which is where the geometry comes from and why nothing new has to be
+read off disk to get it.
 
 Saves are opened read-only and immutable; the tool never writes to them.

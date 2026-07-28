@@ -57,25 +57,47 @@ def write_map(path, img, r, cd, info, save, png=False):
     return path
 
 
-def write_map3d(path, r, cd, info, save):
+def write_map3d(path, r, cd, info, save, db=None, objects=False,
+                budget=None, progress=None):
     """Write the solid view of the same render. Needs render(fields=True).
 
     Nothing here re-reads the save or the game: the 3D page is made out of the
     very same render the flat map is made of, only taken a step earlier, before
     the height was flattened into shading.
+
+    With ``objects`` the props go in as their own collision meshes rather than
+    as bumps in the ground, which needs the asset database the render used.
     """
+    from . import objects3d
     from . import terrain3d
     from . import viewer3d
 
     if r.albedo is None:
         raise RuntimeError("the render did not keep its fields; "
                            "call MapRenderer.render(fields=True)")
-    height, meta = terrain3d.payload(r, cd)
+
+    solid = None
+    if objects and db is not None and r.baker is not None:
+        kw = {} if budget is None else {"budget": budget}
+        solid = objects3d.collect(r, db, r.baker.loader, terrain3d.extent(r),
+                                  progress=progress, **kw)
+
+    height, meta = terrain3d.payload(r, cd, objects=solid is not None)
+    prop = terrain3d.prop_texture(r) if solid is not None else None
     colour = terrain3d.colour_texture(r)
+
     stats = _world_stats(r, cd, info, save)
     stats.insert(4, ("relief", "%.0f to %.0f m" % (meta["lo"], meta["hi"])))
+    if solid is not None:
+        s = solid["stats"]
+        stats.append(("objects", "%s of %s placed"
+                      % (format(s["drawn"], ",d"), format(s["placed"], ",d"))))
+        stats.append(("geometry", "%s kinds, %s triangles"
+                      % (format(s["meshes"], ",d"),
+                         format(s["triangles"], ",d"))))
     viewer3d.write_html(path, colour, height, meta, stats, save.name,
-                        "Scrap Mechanic survival world  ·  1 cell = 64 m")
+                        "Scrap Mechanic survival world  ·  1 cell = 64 m",
+                        prop=prop, objects=solid)
     return path
 
 

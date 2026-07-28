@@ -12,6 +12,7 @@ import webbrowser
 
 from . import assets
 from . import discover
+from . import objects3d
 from . import output
 from . import savefile
 from . import tiles
@@ -59,6 +60,14 @@ def main(argv=None):
     ap.add_argument("--png", action="store_true", help="write a .png only")
     ap.add_argument("--3d", dest="three_d", action="store_true",
                     help="write the world as a 3D page you can fly around")
+    ap.add_argument("--no-objects", dest="objects", action="store_false",
+                    help="with --3d, leave the props in the ground as relief "
+                         "instead of standing them up as their own meshes")
+    ap.add_argument("--objects", dest="budget", type=int,
+                    default=objects3d.DEFAULT_BUDGET, metavar="N",
+                    help="with --3d, how many objects to carry, biggest first "
+                         "(default %d; 0 for every one of them)"
+                         % objects3d.DEFAULT_BUDGET)
     ap.add_argument("--no-shade", action="store_true", help="disable hillshading")
     ap.add_argument("--no-structures", action="store_true",
                     help="draw bare terrain, without buildings, rocks and trees")
@@ -198,7 +207,12 @@ def render_one(save, index, args):
         want_png = args.png or ext.lower() == ".png"
         if args.three_d:
             path = root + ".html"
-            output.write_map3d(path, r, cd, info, save)
+            if args.objects:
+                sys.stdout.write("         standing the objects up...\r")
+                sys.stdout.flush()
+            output.write_map3d(path, r, cd, info, save, db=args.db,
+                               objects=args.objects, budget=args.budget)
+            sys.stdout.write(" " * 40 + "\r")
             print("         %s  (3D)" % path)
         else:
             path = root + (".png" if want_png else ".html")

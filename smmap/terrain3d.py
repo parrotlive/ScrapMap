@@ -43,6 +43,11 @@ LEVEL_SPAN = LEVEL_MAX - 1                     # 16382
 HEIGHT_TEXELS = 1536
 COLOUR_TEXELS = 4096
 
+# The tallest prop the shadow texture can describe. Nothing the world generator
+# places comes near it -- the silo is the tallest thing in a survival world and
+# it is well under forty metres.
+PROP_CEILING = 64.0
+
 
 def _blocks(h, w, target):
     """Reduction factor and result shape for shrinking (h, w) to <= target.
@@ -92,17 +97,56 @@ def _sea_level(water):
     return float(vals[int(np.argmax(n))])
 
 
-def height_texture(r, target=HEIGHT_TEXELS):
+def extent(r, target=HEIGHT_TEXELS):
+    """What the textures will cover on the ground, in metres, padding included.
+
+    The same answer height_texture gives, without packing a texture to get it,
+    for callers that only need to know how big the world is laid out.
+    """
+    f, dh, dw = _blocks(r.height_map.shape[0], r.height_map.shape[1], target)
+    mpp = 64.0 / r.px
+    return dw * f * mpp, dh * f * mpp
+
+
+def _ground(r):
+    return np.nan_to_num(r.height_map.astype(np.float32), nan=0.0,
+                         posinf=0.0, neginf=0.0)
+
+
+def _top(r):
+    return (np.zeros(r.height_map.shape, np.float32) if r.top_map is None
+            else np.maximum(r.top_map.astype(np.float32), 0.0))
+
+
+def prop_texture(r, target=HEIGHT_TEXELS):
+    """How far the props stand above the ground, a byte a texel.
+
+    Only the shadow pass wants this. When the props are drawn as real meshes
+    they are no longer part of the ground, so the ground mesh must not have
+    their bumps in it -- but their shadows should still fall across the land,
+    and a shadow does not need a millimetre. A byte over sixty-four metres is a
+    quarter of a metre, and over most of a world it is zero, which is why the
+    whole thing costs a few tens of kilobytes.
+    """
+    f, dh, dw = _blocks(r.height_map.shape[0], r.height_map.shape[1], target)
+    top = _reduce(_top(r), f, dh, dw, "max")
+    return np.round(np.clip(top / PROP_CEILING, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def height_texture(r, target=HEIGHT_TEXELS, props=True):
     """Pack the render's height fields into an (dh, dw, 4) uint8 array.
 
     Returns the array and the numbers needed to read it back: the world height
     the texture's 0 and 1 stand for, how many metres a texel covers, and how
     much of the map the padding added.
+
+    ``props`` puts what stands on the ground into the ground, which is what the
+    map does and what a viewer with no other way to show a building wants. Turn
+    it off when the buildings are going in as real geometry, or the world gets
+    each of them twice: once as a mesh and once as a lump under it.
     """
-    ground = np.nan_to_num(r.height_map.astype(np.float32), nan=0.0,
-                           posinf=0.0, neginf=0.0)
-    top = (np.zeros_like(ground) if r.top_map is None
-           else np.maximum(r.top_map.astype(np.float32), 0.0))
+    ground = _ground(r)
+    top = _top(r) if props else np.zeros(ground.shape, np.float32)
     water = r.water_level.astype(np.float32)
     kind = r.water_kind
 
@@ -179,10 +223,11 @@ def colour_texture(r, cap=COLOUR_TEXELS):
     return img
 
 
-def payload(r, cd):
+def payload(r, cd, objects=False):
     """Everything the page needs about the world, ready to be JSON'd."""
-    hx, meta = height_texture(r)
+    hx, meta = height_texture(r, props=not objects)
     meta.update({
+        "propCeiling": PROP_CEILING,
         "seed": str(cd.get("seed", "?")),
         "cellsX": r.w,
         "cellsY": r.h,

@@ -24,6 +24,8 @@ import html
 import io
 import json
 
+import numpy as np
+
 from . import palette
 
 PAGE = r"""<!doctype html>
@@ -96,6 +98,12 @@ PAGE = r"""<!doctype html>
     </select></label>
   <label class="check"><input id="shadows" type="checkbox" checked> Shadows</label>
   <label class="check"><input id="wet" type="checkbox" checked> Water</label>
+  <label class="check" id="objRow" hidden><input id="objs" type="checkbox" checked>
+    Objects</label>
+  <label id="reachRow" hidden
+         title="How far a one-metre object is drawn. Bigger things carry proportionally further, so a warehouse is visible long after the bushes around it have gone.">
+    <span class="row"><span>Object range</span><b id="reachOut">250 m</b></span>
+    <input id="reach" type="range" min="40" max="700" value="250"></label>
 </div>
 
 <div class="panel" id="help">
@@ -108,6 +116,14 @@ PAGE = r"""<!doctype html>
 <script>
 const META = __META__;
 const LIQUID = __LIQUID__;
+/* One entry per distinct mesh: where its triangles are, which run of instances
+   belongs to it, and how big it is. Null when the world went up without its
+   objects. */
+const OBJ_DRAWS = __OBJ_DRAWS__;
+const OBJ_VERTS = __OBJ_VERTS__;
+const OBJ_INDEX = __OBJ_INDEX__;
+const OBJ_INST = __OBJ_INST__;
+const OBJ_STRIDE = 36;
 
 /* ---------------------------------------------------------------- matrices */
 /* Just enough 4x4 to place a camera and to turn a pixel back into a ray. */
@@ -273,24 +289,39 @@ void main() {
 /* The shadow pass. One texel of the height field per pixel: stand on it and
  * walk towards the sun until something gets in the way. Steps grow as they go,
  * so a couple of dozen of them still reach a ridge a kilometre off, and the
- * shadow softens with distance the way a real one does. */
+ * shadow softens with distance the way a real one does.
+ *
+ * It walks twice and keeps both answers. Red counts the props as part of the
+ * ground, which is what puts a building's shadow on the grass beside it. Green
+ * counts only the land, and it is what the props themselves are lit by --
+ * because a building stands inside its own footprint, and shading it with red
+ * would have every object in the world in its own shadow. */
 const SHADOW_FS = `#version 300 es
 precision highp float;
 precision highp int;
 ` + COMMON + `
 uniform vec3 uSun;
+uniform sampler2D uProp;
+uniform float uPropCeiling;
 out vec4 frag;
-void main() {
-  if (uSun.y <= 0.01) { frag = vec4(0.0); return; }
-  vec2 uv = gl_FragCoord.xy / vec2(uTexSize);
-  vec3 w = worldOf(uv, solidAt(uv));
+
+/* What blocks the light. When the props are drawn as real meshes they are no
+   longer part of the ground, so the ground alone would leave a town casting no
+   shadow at all; k puts their height back. With the props still in the ground
+   the prop texture is a single black texel and k makes no difference. */
+float reliefAt(vec2 uv, float k) {
+  return solidAt(uv) + texture(uProp, uv).r * uPropCeiling * k;
+}
+
+float march(vec2 uv, float k) {
+  vec3 w = worldOf(uv, reliefAt(uv, k));
   float step = length(uSpan) / float(max(uTexSize.x, uTexSize.y)) * 1.5;
   float t = step, s = 1.0;
   for (int i = 0; i < 40; i++) {
     vec3 p = w + uSun * t;
     vec2 q = uvOf(p);
     if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) break;
-    float d = solidAt(q) * uExag - p.y;
+    float d = reliefAt(q, k) * uExag - p.y;
     if (d > 0.0) {
       s = min(s, 1.0 - clamp(d / (0.30 * t), 0.0, 1.0));
       if (s <= 0.001) break;
@@ -298,7 +329,13 @@ void main() {
     t += step;
     step *= 1.16;
   }
-  frag = vec4(s, s, s, 1.0);
+  return s;
+}
+
+void main() {
+  if (uSun.y <= 0.01) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  vec2 uv = gl_FragCoord.xy / vec2(uTexSize);
+  frag = vec4(march(uv, 1.0), march(uv, 0.0), 0.0, 1.0);
 }`;
 
 /* The land and the water share a vertex shader shape: work out which quad and
@@ -506,6 +543,78 @@ void main() {
   frag = waterLook(vWorld, 14.0, 0, 1.0);
 }`;
 
+/* Every placed object, drawn as the shape the game itself collides against.
+ *
+ * One draw call per distinct mesh, however many of them are standing about:
+ * the mesh goes up once and each instance contributes a transform, a colour
+ * and a size. The size is what lets a vertex decide it is too far away to be
+ * worth drawing -- a warehouse is worth a kilometre and a bush is not -- which
+ * is the whole of the level of detail here and most of the frame rate. */
+const OBJ_VS = `#version 300 es
+precision highp float;
+precision highp int;
+` + COMMON + `
+uniform mat4 uVP;
+uniform vec3 uEye;
+uniform vec3 uCentre;      /* middle of this mesh, in its own frame */
+uniform float uReach;      /* how many metres of view each metre of object buys */
+in vec3 aVert;
+in vec3 aPos;
+in vec3 aM0;
+in vec3 aM1;
+in vec3 aM2;
+in vec3 aRgb;
+in float aRadius;
+out vec3 vWorld;
+out vec3 vRgb;
+void main() {
+  /* Packed column by column, so this is the placement's own matrix and not
+     its transpose. */
+  mat3 M = mat3(aM0, aM1, aM2);
+  /* Relief lifts where a thing stands without stretching the thing itself: a
+     silo at five times the relief is a silo five times as high up, not a silo
+     five times as tall. */
+  vec3 base = vec3(aPos.x, aPos.y * uExag, aPos.z);
+  if (distance(uEye, base + M * uCentre) > aRadius * uReach) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);   /* behind the far plane: clipped */
+    return;
+  }
+  vWorld = base + M * aVert;
+  vRgb = aRgb;
+  gl_Position = uVP * vec4(vWorld, 1.0);
+}`;
+
+const OBJ_FS = `#version 300 es
+precision highp float;
+precision highp int;
+` + COMMON + SKY + `
+uniform sampler2D uShadow;
+uniform vec3 uEye;
+uniform float uFog;
+uniform float uShadowOn;
+in vec3 vWorld;
+in vec3 vRgb;
+out vec4 frag;
+void main() {
+  /* A collision hull is flat-faced and closed, so the normal is the facet's
+     own -- taken from how the world position changes across the pixel, which
+     costs no buffer -- turned to face whoever is looking at it. */
+  vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+  vec3 view = normalize(uEye - vWorld);
+  if (dot(n, view) < 0.0) n = -n;
+
+  float sun = max(dot(n, uSun), 0.0);
+  /* Green: the land's shadow only. Red has this object in it. */
+  float shade = mix(1.0, texture(uShadow, uvOf(vWorld)).g, uShadowOn);
+  vec3 ambient = mix(vec3(0.19, 0.18, 0.16), vec3(0.34, 0.40, 0.50),
+                     0.5 + 0.5 * n.y);
+  vec3 lit = vRgb * (ambient + vec3(1.05, 0.98, 0.86) * sun * shade);
+
+  vec3 toEye = vWorld - uEye;
+  float d = length(toEye) * uFog;
+  frag = vec4(mix(lit, skyColour(normalize(toEye)), 1.0 - exp(-d * d)), 1.0);
+}`;
+
 /* --------------------------------------------------------------- the world */
 
 const stage = document.getElementById('stage');
@@ -589,9 +698,15 @@ function texture(src, filter, w, h) {
   gl.bindTexture(gl.TEXTURE_2D, t);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-  if (src) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
-  else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA,
-                     gl.UNSIGNED_BYTE, null);
+  if (src instanceof Uint8Array) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA,
+                  gl.UNSIGNED_BYTE, src);
+  } else if (src) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  } else {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA,
+                  gl.UNSIGNED_BYTE, null);
+  }
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
@@ -605,8 +720,13 @@ const cam = { yaw: 0.6, pitch: 0.55, dist: 1, tx: 0, ty: 0, tz: 0 };
 const ui = {
   az: document.getElementById('az'), el: document.getElementById('el'),
   ex: document.getElementById('ex'), detail: document.getElementById('detail'),
-  shadows: document.getElementById('shadows'), wet: document.getElementById('wet')
+  shadows: document.getElementById('shadows'), wet: document.getElementById('wet'),
+  objs: document.getElementById('objs'), reach: document.getElementById('reach')
 };
+if (OBJ_DRAWS && OBJ_DRAWS.length) {
+  document.getElementById('objRow').hidden = false;
+  document.getElementById('reachRow').hidden = false;
+}
 let exag = 1, shadowStale = true;
 
 function sunVec() {
@@ -695,19 +815,23 @@ const azOut = document.getElementById('azOut'), elOut = document.getElementById(
 const exOut = document.getElementById('exOut'), eyeOut = document.getElementById('eye');
 const fpsOut = document.getElementById('fps');
 
+const reachOut = document.getElementById('reachOut');
+
 function readUi() {
   azOut.textContent = ui.az.value + '°';
   elOut.textContent = ui.el.value + '°';
+  reachOut.textContent = ui.reach.value + ' m';
   const e = ui.ex.value / 10;
   exOut.textContent = e.toFixed(1) + '×';
   if (e !== exag) { cam.ty *= e / exag; exag = e; }
   shadowStale = true;
 }
-for (const el of [ui.az, ui.el, ui.ex]) el.addEventListener('input', readUi);
+for (const el of [ui.az, ui.el, ui.ex, ui.reach]) el.addEventListener('input', readUi);
 
 async function start() {
-  const [colour, height] = await Promise.all([
-    decode(__COLOUR__, '__COLOUR_MIME__'), decode(__HEIGHT__, 'image/png')
+  const [colour, height, prop] = await Promise.all([
+    decode(__COLOUR__, '__COLOUR_MIME__'), decode(__HEIGHT__, 'image/png'),
+    __PROP__ ? decode(__PROP__, 'image/png') : null
   ]);
 
   /* A card only has to offer 2048; anything bigger and the colour has to come
@@ -735,6 +859,10 @@ async function start() {
   }
   const texHeight = texture(height, gl.NEAREST);
   const texShadow = texture(null, gl.LINEAR, META.texW, META.texH);
+  /* With the props still baked into the ground there is nothing to add back,
+     so a single black texel stands in and the shadow pass needs no branch. */
+  const texProp = prop ? texture(prop, gl.LINEAR)
+                       : texture(new Uint8Array([0, 0, 0, 255]), gl.NEAREST, 1, 1);
   const fbo = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D,
@@ -746,13 +874,63 @@ async function start() {
   const pLand = program(LAND_VS, LAND_FS);
   const pWater = program(WATER_VS, WATER_FS);
   const pSea = META.sea === null ? null : program(SEA_VS, SEA_FS);
+  const haveObjects = !!(OBJ_DRAWS && OBJ_DRAWS.length);
+  const pObj = haveObjects ? program(OBJ_VS, OBJ_FS) : null;
 
-  /* Nothing here has vertex attributes, but a bound array object is still
-     required before a draw call. */
-  gl.bindVertexArray(gl.createVertexArray());
+  /* The terrain, the water and the sky have no vertex attributes at all, but a
+     bound array object is still required before a draw call. */
+  const blankVao = gl.createVertexArray();
+  gl.bindVertexArray(blankVao);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texHeight);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texColour);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, texShadow);
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, texProp);
+
+  /* The objects do have attributes: the mesh library in one buffer shared by
+     every draw, and the instances in another that each draw points into at a
+     different offset. */
+  let objVao = null, objInstances = null, objLoc = null;
+  if (haveObjects) {
+    const verts = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, verts);
+    gl.bufferData(gl.ARRAY_BUFFER, bytes(OBJ_VERTS), gl.STATIC_DRAW);
+    const index = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, bytes(OBJ_INDEX), gl.STATIC_DRAW);
+    objInstances = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, objInstances);
+    gl.bufferData(gl.ARRAY_BUFFER, bytes(OBJ_INST), gl.STATIC_DRAW);
+
+    objLoc = {};
+    for (const n of ['aVert', 'aPos', 'aM0', 'aM1', 'aM2', 'aRgb', 'aRadius'])
+      objLoc[n] = gl.getAttribLocation(pObj, n);
+
+    objVao = gl.createVertexArray();
+    gl.bindVertexArray(objVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+    gl.bindBuffer(gl.ARRAY_BUFFER, verts);
+    gl.enableVertexAttribArray(objLoc.aVert);
+    gl.vertexAttribPointer(objLoc.aVert, 3, gl.FLOAT, false, 12, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, objInstances);
+    for (const n of ['aPos', 'aM0', 'aM1', 'aM2', 'aRgb', 'aRadius']) {
+      gl.enableVertexAttribArray(objLoc[n]);
+      gl.vertexAttribDivisor(objLoc[n], 1);
+    }
+    gl.bindVertexArray(blankVao);
+  }
+
+  /* Point the instance attributes at one mesh's run of instances. Their layout
+     never changes, only where in the buffer they start. */
+  function atInstance(first) {
+    const at = first * OBJ_STRIDE;
+    gl.vertexAttribPointer(objLoc.aPos, 3, gl.FLOAT, false, OBJ_STRIDE, at);
+    gl.vertexAttribPointer(objLoc.aM0, 3, gl.HALF_FLOAT, false, OBJ_STRIDE, at + 12);
+    gl.vertexAttribPointer(objLoc.aM1, 3, gl.HALF_FLOAT, false, OBJ_STRIDE, at + 18);
+    gl.vertexAttribPointer(objLoc.aM2, 3, gl.HALF_FLOAT, false, OBJ_STRIDE, at + 24);
+    gl.vertexAttribPointer(objLoc.aRgb, 3, gl.UNSIGNED_BYTE, true, OBJ_STRIDE, at + 30);
+    gl.vertexAttribPointer(objLoc.aRadius, 1, gl.UNSIGNED_BYTE, false,
+                           OBJ_STRIDE, at + 33);
+  }
 
   const span = [META.spanX, META.spanY];
   const range = [META.lo, META.hi - META.lo];
@@ -766,6 +944,8 @@ async function start() {
     if (p.u.uHeight) gl.uniform1i(p.u.uHeight, 0);
     if (p.u.uColour) gl.uniform1i(p.u.uColour, 1);
     if (p.u.uShadow) gl.uniform1i(p.u.uShadow, 2);
+    if (p.u.uProp) gl.uniform1i(p.u.uProp, 3);
+    if (p.u.uPropCeiling) gl.uniform1f(p.u.uPropCeiling, META.propCeiling);
     if (p.u.uTexSize) gl.uniform2i(p.u.uTexSize, META.texW, META.texH);
     if (p.u.uRange) gl.uniform2fv(p.u.uRange, range);
     if (p.u.uSpan) gl.uniform2fv(p.u.uSpan, span);
@@ -841,6 +1021,23 @@ async function start() {
     gl.uniform2i(pLand.u.uGrid, gx, gy);
     gl.drawArrays(gl.TRIANGLES, 0, verts);
 
+    /* The objects go down on the land and before the water, so that a pier
+       stands out of a lake and its piles still darken under it. */
+    if (haveObjects && ui.objs.checked) {
+      gl.bindVertexArray(objVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, objInstances);
+      common(pObj);
+      gl.uniformMatrix4fv(pObj.u.uVP, false, vp);
+      gl.uniform1f(pObj.u.uReach, parseFloat(ui.reach.value));
+      for (const d of OBJ_DRAWS) {
+        gl.uniform3fv(pObj.u.uCentre, d.centre);
+        atInstance(d.start);
+        gl.drawElementsInstanced(gl.TRIANGLES, d.elems, gl.UNSIGNED_INT,
+                                 d.index * 4, d.count);
+      }
+      gl.bindVertexArray(blankVao);
+    }
+
     if (ui.wet.checked) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -911,13 +1108,36 @@ def _height(array):
     return _b64(buf.getvalue())
 
 
-def write_html(path, colour, height, meta, stats, title, subtitle):
-    """colour: PIL Image. height: (h, w, 4) uint8 from terrain3d."""
+def _grey(array):
+    """The prop height field as a PNG. One channel of data, three of nothing.
+
+    Written as RGBA rather than as greyscale because that is what WebGL wants
+    to be handed, and because over most of a world it is zero either way: PNG
+    charges almost nothing for the three channels that never change.
+    """
+    from PIL import Image
+    buf = io.BytesIO()
+    rgba = np.zeros(array.shape + (4,), np.uint8)
+    rgba[:, :, 0] = array
+    rgba[:, :, 3] = 255
+    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
+    return _b64(buf.getvalue())
+
+
+def write_html(path, colour, height, meta, stats, title, subtitle,
+               prop=None, objects=None):
+    """colour: PIL Image. height: (h, w, 4) uint8 from terrain3d.
+
+    ``prop`` is the separate prop-height field the shadow pass needs once the
+    props have left the ground, and ``objects`` is what objects3d.collect
+    returned: a mesh library, an instance buffer and a draw list.
+    """
     b64, mime = _colour(colour)
     liquid = {
         "shallow": [c / 255.0 for pair in palette.LIQUID_RGB for c in pair[0]],
         "deep": [c / 255.0 for pair in palette.LIQUID_RGB for c in pair[1]],
     }
+    o = objects or {}
     page = PAGE
     for token, value in (
             ("__TITLE__", html.escape(title)),
@@ -926,10 +1146,22 @@ def write_html(path, colour, height, meta, stats, title, subtitle):
             ("__STATS__", _stats(stats)),
             ("__META__", json.dumps(meta)),
             ("__LIQUID__", json.dumps(liquid)),
+            ("__OBJ_DRAWS__", json.dumps(o.get("draws")) if o else "null"),
+            ("__OBJ_VERTS__", _buffer(o.get("verts"))),
+            ("__OBJ_INDEX__", _buffer(o.get("index"))),
+            ("__OBJ_INST__", _buffer(o.get("instances"))),
             ("__COLOUR_MIME__", mime),
             ("__COLOUR__", "'%s'" % b64),
+            ("__PROP__", "null" if prop is None else "'%s'" % _grey(prop)),
             ("__HEIGHT__", "'%s'" % _height(height))):
         page = page.replace(token, value)
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
     return path
+
+
+def _buffer(array):
+    """A numpy array as a base64 JS string literal, or null."""
+    if array is None:
+        return "null"
+    return "'%s'" % _b64(np.ascontiguousarray(array).tobytes())

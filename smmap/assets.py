@@ -112,6 +112,7 @@ class AssetDb(object):
         self.game_dir = game_dir
         self.by_uuid = {}
         self._shapes = {}
+        self._meshes = {}
         self._cats = {}
         self._liquids = {}
         self._scan()
@@ -218,42 +219,121 @@ class AssetDb(object):
 
     # -- collision geometry ----------------------------------------------
 
-    def shape(self, uuid):
-        """Local-space extreme points (K, 3) of the collision mesh, or None.
+    def _obj_path(self, uuid):
+        """Where this asset's collision mesh lives, if it has one to draw.
 
-        Meshes are Y-up; the caller rotates them into the world's Z-up frame.
-        Assets with no renderable are invisible collision volumes and are
-        deliberately given no shape, so nothing draws them.
+        Assets with no renderable are invisible collision volumes -- trigger
+        boxes, blockers -- and are deliberately treated as having no mesh, so
+        nothing ever draws them.
         """
-        if uuid in self._shapes:
-            return self._shapes[uuid]
-        self._shapes[uuid] = None
         a = self.by_uuid.get(uuid)
         if not a or not a.get("col") or not a.get("renderable"):
             return None
         path = self._expand(a["col"])
-        if not os.path.isfile(path):
+        return path if os.path.isfile(path) else None
+
+    def mesh(self, uuid):
+        """The collision mesh as (vertices (N, 3), triangles (M, 3)), or None.
+
+        These are the shapes the game itself collides against: a warehouse is a
+        warehouse, a boulder is that boulder. They are simpler than the art the
+        game draws -- no texture, fewer faces, and a tree is the trunk and a
+        cone rather than every leaf -- but they are the real geometry of the
+        real object, and they are the only geometry that is readable without
+        decoding the engine's own mesh format.
+
+        Meshes are Y-up; the caller rotates them into the world's Z-up frame.
+        """
+        if uuid in self._meshes:
+            return self._meshes[uuid]
+        self._meshes[uuid] = None
+        path = self._obj_path(uuid)
+        if path is None:
             return None
         try:
             with open(path, "rb") as fh:
                 text = fh.read().decode("ascii", "replace")
         except OSError:
             return None
-        xs = []
-        for line in text.splitlines():
-            if line[:2] == "v ":
-                p = line.split()
-                if len(p) >= 4:
-                    try:
-                        xs.append((float(p[1]), float(p[2]), float(p[3])))
-                    except ValueError:
-                        pass
-        if not xs:
+        out = _read_obj(text)
+        self._meshes[uuid] = out
+        return out
+
+    def shape(self, uuid):
+        """Local-space extreme points (K, 3) of the collision mesh, or None.
+
+        The same mesh as mesh(), reduced to the handful of points the flat map
+        needs to fill a footprint.
+        """
+        if uuid in self._shapes:
+            return self._shapes[uuid]
+        self._shapes[uuid] = None
+        m = self.mesh(uuid)
+        if m is None:
             return None
-        v = np.asarray(xs, dtype=np.float32)
+        v = m[0]
         if len(v) > len(_DIRS):
             # Keep only the vertex furthest along each probe direction.
             keep = np.unique(np.argmax(v @ _DIRS.T, axis=0))
             v = v[keep]
         self._shapes[uuid] = v
         return v
+
+
+def _face_index(field, n):
+    """One vertex index out of an .obj face field.
+
+    A field is ``v``, ``v/vt``, ``v//vn`` or ``v/vt/vn``, and the index is
+    1-based, or negative to count back from the vertices seen so far.
+    """
+    s = field.split("/", 1)[0]
+    if not s:
+        return None
+    try:
+        i = int(s)
+    except ValueError:
+        return None
+    if i > 0:
+        return i - 1 if i <= n else None
+    if i < 0:
+        return n + i if -i <= n else None
+    return None
+
+
+def _read_obj(text):
+    """Parse a Wavefront .obj into (vertices, triangles), or None if empty.
+
+    Only ``v`` and ``f`` matter here: the collision meshes carry no texture
+    coordinates worth having and no materials at all. Faces with more than
+    three corners are fanned, which is right for the convex faces a collision
+    hull is made of.
+    """
+    verts = []
+    tris = []
+    for line in text.splitlines():
+        tag = line[:2]
+        if tag == "v ":
+            p = line.split()
+            if len(p) >= 4:
+                try:
+                    verts.append((float(p[1]), float(p[2]), float(p[3])))
+                except ValueError:
+                    pass
+        elif tag == "f ":
+            idx = []
+            for field in line.split()[1:]:
+                i = _face_index(field, len(verts))
+                if i is not None:
+                    idx.append(i)
+            for k in range(1, len(idx) - 1):
+                tris.append((idx[0], idx[k], idx[k + 1]))
+    if not verts:
+        return None
+    v = np.asarray(verts, dtype=np.float32)
+    if not tris:
+        return None
+    t = np.asarray(tris, dtype=np.uint32)
+    # A degenerate face contributes nothing and would give a zero normal.
+    keep = (t[:, 0] != t[:, 1]) & (t[:, 1] != t[:, 2]) & (t[:, 0] != t[:, 2])
+    t = t[keep]
+    return (v, t) if len(t) else None

@@ -100,6 +100,8 @@ class MapRenderer(object):
         self.top_map = None
         self.water_level = None
         self.water_kind = None
+        self.elevation = None
+        self.placements = None
 
     # -- per-tile data ----------------------------------------------------
 
@@ -242,6 +244,12 @@ class MapRenderer(object):
 
         elev = self._elevation_grid()
         groups = self._placements(img)
+        if fields:
+            # Which tile fills which cell, and how high the ground under it
+            # sits. objects3d walks these again to put the props into the world
+            # as real meshes rather than as a footprint and a height.
+            self.elevation = elev
+            self.placements = groups
         total = sum(len(v) for v in groups.values())
         done = 0
         # Only worth counting up the world's water levels if something is going
