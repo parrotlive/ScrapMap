@@ -113,13 +113,22 @@ class App(object):
         self.structures = tk.BooleanVar(value=True)
         self.shade = tk.BooleanVar(value=True)
         self.png = tk.BooleanVar(value=False)
+        self.three_d = tk.BooleanVar(value=False)
         ttk.Checkbutton(row, text="Buildings, rocks and trees",
                         variable=self.structures,
                         command=self._retime).pack(side="left")
         ttk.Checkbutton(row, text="Shaded relief",
                         variable=self.shade).pack(side="left", padx=(16, 0))
         ttk.Checkbutton(row, text="Plain image instead of a page",
-                        variable=self.png).pack(side="left", padx=(16, 0))
+                        variable=self.png,
+                        command=self._exclusive).pack(side="left", padx=(16, 0))
+
+        row = ttk.Frame(opts)
+        row.pack(fill="x", padx=10, pady=2)
+        ttk.Checkbutton(row, text="In 3D, to fly around", variable=self.three_d,
+                        command=self._exclusive).pack(side="left")
+        ttk.Label(row, foreground="#5a6472",
+                  text="the same map, standing up").pack(side="left", padx=(8, 0))
 
         row = ttk.Frame(opts)
         row.pack(fill="x", padx=10, pady=(4, 10))
@@ -188,6 +197,12 @@ class App(object):
         self._set_status("%s about %s" % (
             "%d worlds take" % n if n > 1 else "one world takes", how_long))
 
+    def _exclusive(self):
+        """A flat image and a page you fly around are two different answers."""
+        if self.three_d.get() and self.png.get():
+            self.png.set(False)
+        self._retime()
+
     def _browse(self):
         d = self.filedialog.askdirectory(initialdir=self.folder.get(),
                                          title="Where should the map go?")
@@ -217,7 +232,8 @@ class App(object):
         self.reveal.state(["disabled"])
         opts = dict(px=DETAILS[self.detail.get()][1],
                     structures=self.structures.get(),
-                    shade=self.shade.get(), png=self.png.get(), folder=folder)
+                    shade=self.shade.get(), png=self.png.get(),
+                    three_d=self.three_d.get(), folder=folder)
         self.worker = threading.Thread(target=self._work, args=(saves, opts),
                                        daemon=True)
         self.worker.start()
@@ -269,14 +285,18 @@ class App(object):
                                    (base + span * (0.9 * a / max(b, 1)),
                                     "drawing %s  %d%%" % (name, 100 * a // max(b, 1))))
 
-                    arr = r.render(hillshade=opts["shade"], progress=step)
+                    arr = r.render(hillshade=opts["shade"], progress=step,
+                                   fields=opts["three_d"])
                     self._post("progress", (base + span * 0.92,
                                             "writing the file"))
-                    img = Image.fromarray(arr)
                     path = output.default_path(opts["folder"], save.name,
-                                               opts["png"])
-                    output.write_map(path, img, r, cd, info, save,
-                                     png=opts["png"])
+                                               opts["png"], opts["three_d"])
+                    if opts["three_d"]:
+                        output.write_map3d(path, r, cd, info, save)
+                    else:
+                        img = Image.fromarray(arr)
+                        output.write_map(path, img, r, cd, info, save,
+                                         png=opts["png"])
                     done.append(path)
                     self._post("wrote", (save.name, path, len(r.missing)))
             self._post("finished", done)

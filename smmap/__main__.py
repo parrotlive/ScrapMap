@@ -47,7 +47,8 @@ def pick_save(saves, wanted=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="smmap",
-        description="Render a top-down map of a Scrap Mechanic survival world.")
+        description="Render a map of a Scrap Mechanic survival world, "
+                    "flat or in 3D.")
     ap.add_argument("save", nargs="?",
                     help="save name or .db path (default: your most recent survival world)")
     ap.add_argument("-o", "--out", help="output file (.html or .png)")
@@ -56,6 +57,8 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list saves and exit")
     ap.add_argument("--all", action="store_true", help="render every survival save")
     ap.add_argument("--png", action="store_true", help="write a .png only")
+    ap.add_argument("--3d", dest="three_d", action="store_true",
+                    help="write the world as a 3D page you can fly around")
     ap.add_argument("--no-shade", action="store_true", help="disable hillshading")
     ap.add_argument("--no-structures", action="store_true",
                     help="draw bare terrain, without buildings, rocks and trees")
@@ -101,6 +104,10 @@ def main(argv=None):
     # placed as assets too, and a map with no sea would be a stranger answer
     # than one with no buildings.
     args.db = assets.AssetDb(game)
+
+    if args.three_d and args.png:
+        print("  (ignoring --png: --3d writes a page, not an image)")
+        args.png = False
 
     if args.all:
         targets = [s for s in saves if s.folder.lower() == "survival"]
@@ -172,7 +179,8 @@ def render_one(save, index, args):
                     sys.stdout.write("\r         [%-20s] %3d%%" % (bar, pct))
                     sys.stdout.flush()
 
-        arr = r.render(hillshade=not args.no_shade, progress=progress)
+        arr = r.render(hillshade=not args.no_shade, progress=progress,
+                       fields=args.three_d)
         if progress:
             sys.stdout.write("\r" + " " * 40 + "\r")
         print("         rendered in %.1fs" % (time.time() - t0))
@@ -184,13 +192,18 @@ def render_one(save, index, args):
         if base:
             root, ext = os.path.splitext(base)
         else:
+            suffix = "_3d" if args.three_d else "_map"
             root, ext = os.path.join(os.getcwd(),
-                                     output.safe_name(save.name) + "_map"), ""
+                                     output.safe_name(save.name) + suffix), ""
         want_png = args.png or ext.lower() == ".png"
-        path = root + (".png" if want_png else ".html")
-        output.write_map(path, img, r, cd, info, save, png=want_png)
-
-        print("         %s  (%d x %d)" % (path, img.width, img.height))
+        if args.three_d:
+            path = root + ".html"
+            output.write_map3d(path, r, cd, info, save)
+            print("         %s  (3D)" % path)
+        else:
+            path = root + (".png" if want_png else ".html")
+            output.write_map(path, img, r, cd, info, save, png=want_png)
+            print("         %s  (%d x %d)" % (path, img.width, img.height))
         if r.missing:
             print("         note: %d tile id(s) not in this install were drawn purple"
                   % len(r.missing))

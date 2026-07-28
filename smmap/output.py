@@ -41,7 +41,9 @@ def safe_name(name):
                    for c in name).strip() or "world"
 
 
-def default_path(folder, save_name, png=False):
+def default_path(folder, save_name, png=False, three_d=False):
+    if three_d:
+        return os.path.join(folder, safe_name(save_name) + "_3d.html")
     return os.path.join(folder, safe_name(save_name) + "_map"
                         + (".png" if png else ".html"))
 
@@ -55,9 +57,30 @@ def write_map(path, img, r, cd, info, save, png=False):
     return path
 
 
-def _write_viewer(path, img, r, cd, info, save):
-    top = sorted(r.used.items(), key=lambda kv: -kv[1])[:1]
+def write_map3d(path, r, cd, info, save):
+    """Write the solid view of the same render. Needs render(fields=True).
 
+    Nothing here re-reads the save or the game: the 3D page is made out of the
+    very same render the flat map is made of, only taken a step earlier, before
+    the height was flattened into shading.
+    """
+    from . import terrain3d
+    from . import viewer3d
+
+    if r.albedo is None:
+        raise RuntimeError("the render did not keep its fields; "
+                           "call MapRenderer.render(fields=True)")
+    height, meta = terrain3d.payload(r, cd)
+    colour = terrain3d.colour_texture(r)
+    stats = _world_stats(r, cd, info, save)
+    stats.insert(4, ("relief", "%.0f to %.0f m" % (meta["lo"], meta["hi"])))
+    viewer3d.write_html(path, colour, height, meta, stats, save.name,
+                        "Scrap Mechanic survival world  ·  1 cell = 64 m")
+    return path
+
+
+def _world_stats(r, cd, info, save):
+    """The facts about a world, for whichever viewer is being written."""
     # "Land" is everything the world's water does not cover; counting placed
     # tiles would just say 100%, since the ocean is made of tiles too.
     wet = r.water_mask
@@ -76,6 +99,12 @@ def _write_viewer(path, img, r, cd, info, save):
     tick = info.get("gametick")
     if isinstance(tick, int) and tick > 0:
         stats.insert(5, ("played", "%.1f h" % (tick / 40.0 / 3600.0)))  # 40 ticks/s
+    return stats
+
+
+def _write_viewer(path, img, r, cd, info, save):
+    top = sorted(r.used.items(), key=lambda kv: -kv[1])[:1]
+    stats = _world_stats(r, cd, info, save)
     if top:
         stats.append(("most common", top[0][0]))
 

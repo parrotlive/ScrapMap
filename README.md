@@ -75,7 +75,8 @@ use, and the environment it is cut from holds only what the tool imports.
 Every save on the PC, newest first, with the one you last played picked out.
 Detail runs from quick (4 m per pixel) through normal to fine (1 m per pixel,
 about a minute and a half for a full world); you can turn off the structures or
-the shading, write a plain image instead of a page, and choose where it lands.
+the shading, write a plain image instead of a page or a 3D one you can fly
+around, and choose where it lands.
 Pick several worlds and it does them one after another. It tells you roughly how
 long it will take before you start, how far along it is while it runs, and the
 same button stops it.
@@ -94,6 +95,29 @@ the sea, every lake, the pond inside a hideout, the canals around the silo
 district — with chemical baths and oil pools drawn as what they are, and a dry
 pit like the excavation mine left dry however far below the sea it goes.
 
+## In three dimensions
+
+`--3d`, or the checkbox in the window, writes `<world>_3d.html` instead: the
+same map, standing up. Drag to turn, right-drag or `shift`-drag to move, scroll
+to zoom, `W A S D` to fly, `R` to reset the view and `T` to look straight down.
+The sun moves round the compass and up and down the sky, the relief exaggerates
+from a half to six times for a world that is mostly gentle, and the ground
+detail comes down for a slower machine.
+
+It is the same render, taken a step earlier. The flat map spends the world's
+height on shading it into a picture; the 3D page keeps the height and lets the
+graphics card do the shading instead. So the ground colour goes up as a texture
+and the ground itself as a mesh, with the buildings, rocks and trees standing on
+it at the height they really stand — a warehouse is a box you can walk round
+rather than a bright edge and a shadow. Water is a surface at the level the
+tiles put it, cut off exactly where the land comes up through it, and the
+shadows are cast by the terrain rather than drawn on, so moving the sun moves
+them.
+
+One self-contained file again, and about the same size: a full world is under
+3 MB with everything in it. It needs WebGL 2, which every current browser has;
+the flat map needs nothing.
+
 ## Command line
 
 Not required, but it's there — the executable is the same program, so
@@ -106,6 +130,7 @@ python -m smmap --list           # show every save it found
 python -m smmap "My World"       # a world by name (substring is fine)
 python -m smmap --all            # every survival world
 python -m smmap --png            # PNG instead of HTML
+python -m smmap --3d             # the world in 3D, to fly around
 python -m smmap --px 64          # 64 px per 64 m cell (one metre per pixel)
 python -m smmap --no-structures  # bare terrain, still with its water
 python -m smmap --no-shade       # flat colours, no hillshading
@@ -250,6 +275,8 @@ smmap/
   palette.py        terrain and liquid colours
   render.py         map compositing
   viewer.py         self-contained HTML viewer
+  terrain3d.py      packs a render's heights and colour into GPU textures
+  viewer3d.py       self-contained WebGL viewer
 ```
 
 The viewer never hands the whole map to the browser as one transformed element:
@@ -257,5 +284,15 @@ sixteen megapixels of it would be a large thing to ask a compositor to scale on
 every frame of a drag. Each frame copies only the rectangle that is on screen
 into a viewport-sized canvas, which costs the same at any zoom and for any size
 of world.
+
+The 3D one carries no geometry at all. Every vertex works out which corner of
+which quad it is from its own index and reads its height out of a texture, so
+the land can be re-tessellated between a hundred thousand triangles and eleven
+million by changing one number, with nothing to rebuild and nothing to send to
+the card. Height goes up as a 16-bit number split across two channels of an
+ordinary image, which is why it is the one thing in the page that must stay a
+PNG: it is data, not a picture, and there is no visually identical smaller
+version of it. Shadows are traced once into an offscreen texture when the sun
+moves rather than marched again for every pixel of every frame.
 
 Saves are opened read-only and immutable; the tool never writes to them.

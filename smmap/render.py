@@ -95,6 +95,11 @@ class MapRenderer(object):
         self.props = 0
         self.empty = []
         self.water_mask = None
+        # Set by render(fields=True); see _keep.
+        self.albedo = None
+        self.top_map = None
+        self.water_level = None
+        self.water_kind = None
 
     # -- per-tile data ----------------------------------------------------
 
@@ -223,7 +228,7 @@ class MapRenderer(object):
 
     # -- main -------------------------------------------------------------
 
-    def render(self, hillshade=True, water=True, progress=None):
+    def render(self, hillshade=True, water=True, progress=None, fields=False):
         px = self.px
         img = np.empty((self.h * px, self.w * px, 3), dtype=np.float32)
         img[:] = palette.BASE_RGB
@@ -300,6 +305,8 @@ class MapRenderer(object):
                 iy, ix = (self.h - 1 - j) * px, i * px
                 pools[iy:iy + px, ix:ix + px] = sea
         level = 0.0 if pools is None else pools
+        if fields:
+            self._keep(img, hmap, top, level, kinds)
 
         if hillshade:
             # Cell elevation is interpolated per cell, so its slope steps at every
@@ -317,6 +324,30 @@ class MapRenderer(object):
             img = self._apply_water(img, hmap, top, level, kinds)
 
         return np.clip(img, 0, 255).astype(np.uint8)
+
+    def _keep(self, img, hmap, top, level, kinds):
+        """Hold on to the fields the map is made from, for the 3D view.
+
+        Everything below this point in render() is a way of showing height on a
+        flat picture -- the hillshade, the rim light on the props, the depth
+        tint on the water. A viewer that has the height itself wants none of
+        that: it wants the ground colour before anything was done to it, and the
+        three heights that were folded away into shading.
+
+        The colour is copied because the hillshade multiplies it in place. The
+        rest is only ever read after this, so it is shared rather than copied --
+        at two metres per pixel a full world is another 200 MB of float if each
+        of these is duplicated.
+        """
+        self.albedo = np.clip(img, 0, 255).astype(np.uint8)
+        self.height_map = hmap
+        self.top_map = top
+        # A world with no liquid at all reports its sea as a plane no ground can
+        # reach, so the viewer can treat the two cases alike.
+        self.water_level = (np.full(hmap.shape, NO_LIQUID, np.float32)
+                            if np.isscalar(level) else level)
+        self.water_kind = (np.zeros(hmap.shape, np.uint8) if kinds is None
+                           else kinds)
 
     def _light_structures(self, img, top):
         """Stand the props up off the ground with a rim light and a shadow.
