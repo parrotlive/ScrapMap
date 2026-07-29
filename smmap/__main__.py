@@ -10,6 +10,7 @@ import sys
 import time
 import webbrowser
 
+from . import __version__
 from . import assets
 from . import discover
 from . import objects3d
@@ -75,6 +76,8 @@ def main(argv=None):
     ap.add_argument("--game", help="path to the Scrap Mechanic folder")
     ap.add_argument("--gui", action="store_true",
                     help="open the window instead of rendering straight away")
+    ap.add_argument("--version", action="version",
+                    version="Scrap Mechanic map %s" % __version__)
     args = ap.parse_args(argv)
 
     if args.gui:
@@ -84,7 +87,7 @@ def main(argv=None):
         print("\n  This Python has no tkinter, so there is no window to open.")
         print("  Carrying on without it.")
 
-    print("\n  Scrap Mechanic map")
+    print("\n  Scrap Mechanic map %s" % __version__)
 
     game = args.game or discover.find_game()
     if not game:

@@ -1,12 +1,50 @@
 # Scrap Mechanic map
 
-Makes a top-down map of your Scrap Mechanic survival world.
+Makes a map of your Scrap Mechanic survival world — flat from above, or solid
+and standing up so you can fly around it.
 
 **Double-click `ScrapMap.exe`.** A window opens with your worlds already in it,
 the one you played last picked out. Press **Make map** and it renders and opens
 in your browser. Nothing to install, nothing to find, nothing to configure.
 
 ![](docs/gui.png)
+
+## New in 2.0 — the world in three dimensions
+
+Tick **3D** and the map stands up. The ground is a real surface at its real
+height, the water sits where the world puts it, and every object the generator
+placed is there as its own geometry at its own place, size and angle.
+
+![](docs/world3d.png)
+
+Fly down into it and a district reads as a district from the ground rather than
+only from above — silos, warehouses, canals, ruins on their stilts, rock
+outcrops, and undergrowth over all of it:
+
+![](docs/objects3d.png)
+
+That is **641,727 objects** in the world above, every one the generator placed
+down to the last shrub, out of 2.74 million placements — 99.95% of everything
+in the world now has geometry, against 62% in the first cut of the 3D view.
+
+Drag to turn, right-drag to move, scroll to zoom, `W A S D` to fly, `R` to reset
+and `T` to look straight down. The sun moves round the compass and up the sky,
+and the shadows move with it. It needs WebGL 2, which every current browser has.
+
+### What changed since 1.x
+
+- **The 3D view carries the world's real height.** It did not before: a
+  rounding fault in the dry-water marker stretched every world's height range to
+  a billion metres, which quantised the whole map flat. See *Water*, below.
+- **Objects that were silently dropped now appear.** Collision meshes come in
+  two formats and only one was read; a quarter of everything placed has no
+  collision mesh at all; the kinematics had no catalogue entry. All fixed.
+- **Detail now reaches the ground.** Quick, normal and fine gave the same ground
+  mesh, because it was capped below all three. They are now 12, 6 and 3 metres
+  per sample.
+- **Shorelines stopped flickering** where the water surface and the land met.
+
+The flat map is unchanged in character and picked up the same missing props.
 
 ![](docs/example.png)
 
@@ -76,7 +114,8 @@ Every save on the PC, newest first, with the one you last played picked out.
 Detail runs from quick (4 m per pixel) through normal to fine (1 m per pixel,
 about a minute and a half for a full world); you can turn off the structures or
 the shading, write a plain image instead of a page or a 3D one you can fly
-around, and choose where it lands.
+around, and choose where it lands. Detail sets how fine the ground is in 3D as
+well — 12, 6 or 3 metres a sample — so fine is worth asking for there.
 Pick several worlds and it does them one after another. It tells you roughly how
 long it will take before you start, how far along it is while it runs, and the
 same button stops it.
@@ -120,12 +159,28 @@ generator placed goes in as its own geometry, at its own place, size and angle:
 a warehouse is a box you can walk round, a silo is a cylinder twenty-six metres
 up, a district reads as a district from the ground rather than only from above.
 
-The shapes are the game's **collision meshes** — the plain `.obj` beside every
-asset in its catalogue, which is what the game itself collides against. They are
-not the art it draws: no textures, fewer faces, and a tree is a trunk and a cone
-rather than every leaf. Drawing what the game draws would mean decoding its own
-binary mesh format, which this does not do. What is here is the real shape of
-the real object in the real place, painted the colour the placement says it is.
+The shapes are the game's **collision meshes** — what the game itself collides
+against. They are not the art it draws: no textures, fewer faces, and a tree is
+a trunk and a cone rather than every leaf. What is here is the real shape of the
+real object in the real place, painted the colour the placement says it is.
+
+A collision mesh is written either as a plain `.obj` or as an FBX, and which one
+is nothing to do with the asset — it is who exported it. So `fbx.py` reads that
+format too, binary and text alike: without it the piers, the rubble piles, the
+platforms and half the ruins in a world are placed and then quietly dropped,
+which was two hundred of the six hundred kinds of thing a world stands up.
+
+A quarter of everything a world places has no collision mesh at all, because a
+player walks straight through it: the sea plants, the buxus, the column shrubs,
+the sprouts and the sunflowers. For those the only geometry the game has is the
+art, so the art is what goes in — its coarsest level, thinned to its largest
+facets, which is enough for undergrowth seen from above and cheap enough to
+stand a hundred thousand of. Without it a world comes out mown.
+
+Between them the world goes up whole: of the 2.74 million objects one survival
+world places, 99.95% now have geometry, against 62% when only `.obj` was read.
+What is left is the invisible collision volumes — the collider cubes and wedges
+the game does not draw either.
 
 Meshes are shared and placements are not, which is what makes it affordable: a
 world uses a few hundred distinct assets and stands a few hundred thousand of
@@ -136,9 +191,10 @@ and that is the whole of the level of detail.
 
 `--objects N` caps how many are carried, biggest first, because this is the one
 part of the page that does not fit in a couple of megabytes: about a megabyte
-and a half of file per ten thousand objects. The default of 400,000 keeps every
-building, ruin, rock and tree in a world and spends what it drops on the
-smallest scattered undergrowth; `--objects 0` carries all of them and `--no-objects`
+and a half of file per ten thousand objects. The default of 800,000 carries
+every object in an ordinary world outright — a full one comes to about fifty
+megabytes — and only a very crowded one loses anything, smallest first;
+`--objects 0` carries all of them whatever the size, and `--no-objects`
 carries none, putting the props back into the ground as relief the way the flat
 map does. Objects do not cast shadows on each other — their shadows on the
 ground come from the same height field the terrain's do.
@@ -218,9 +274,16 @@ with a parent's non-uniform scale does not in general give back a rotation and a
 scale. Reading only the top level draws the fences and misses the buildings:
 expanding the tree takes the ruined city from 1272 placements to 5232.
 
-Each placement is looked up in the game's `.assetset` and `.harvestableset`
-databases, which name it and point at a collision mesh in plain `.obj`
-(`assets.py`). `detail.py` reduces that mesh to its extreme points, rotates and
+Each placement is looked up in the game's `.assetset`, `.harvestableset` and
+`.kinematicset` databases, which name it and point at a collision mesh
+(`assets.py`). The kinematics are the moving furniture — guardrails, doors,
+lifts, rails, the drill bots' gantries — and `props.py` had always read them out
+of the tilesons; without their own catalogue they had no name and no mesh, so
+they were placed and then dropped. A couple of those files are JSON with `//`
+comments in them, which is not JSON: the comments come out rather than the file,
+because dropping the farming set loses every crop in the world.
+
+`detail.py` reduces that mesh to its extreme points, rotates and
 scales them into world space, and fills the outline they project to — deepest
 first, and only where the prop stands clear of the ground, so mine workings do
 not print through the mountain above them. The colour is the map colour for its
@@ -246,6 +309,17 @@ world came out with 3905 separate bodies of water, 1627 of them four pixels or
 smaller; going by the volumes it has 164, of which 31 are that small. It cuts
 the other way too — the excavation mine descends 95 m below the sea and is bone
 dry, because nothing ever put water in it.
+
+Dry ground is marked by a level no ground can be under, and that mark must
+survive being lifted by the cell it sits in. A sentinel of −1e9 does not: in
+float32 it survives a cell elevation of 32 m and does not survive one of 96 m,
+so on high ground a dry pixel came out a hair above the sentinel and read as a
+lake a billion metres down. That stretched the world's height range from three
+hundred metres to a billion, and the 3D view packs its height into sixteen bits
+over that range — which quantised every hill in the world to the same number and
+laid the whole map out flat. The elevation is now added to the water and not to
+the mark that says there is none, and the ground has its relief back: 42,979
+distinct heights across a world instead of one.
 
 A body of liquid stops at whatever comes up through it, which is what gives a
 pond its shoreline and lets a pier, a canopy or a silo stand in the water rather
@@ -299,7 +373,8 @@ smmap/
   lz4.py            LZ4 block decompressor
   tiles.py          .tile index, LOD decoder, per-cell surface grids
   props.py          .tileson / .prefabson placements, prefab trees flattened
-  assets.py         asset and harvestable databases, collision meshes
+  assets.py         asset, harvestable and kinematic databases, meshes
+  fbx.py            binary and text FBX reader, for the meshes not in .obj
   detail.py         rasterises props and pools into a per-tile overlay
   palette.py        terrain and liquid colours
   render.py         map compositing

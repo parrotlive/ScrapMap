@@ -293,7 +293,16 @@ class MapRenderer(object):
                     dst += _orient(overlay.rgb[cut], r) * a
                     top[iy:iy + px, ix:ix + px] = _orient(overlay.top[cut], r)
                 if overlay.surface is not None:
-                    here = _orient(overlay.surface[cut], r) + base
+                    # The cell's elevation lifts the water it holds, but it must
+                    # not touch the mark that says there is no water here: in
+                    # float32 a sentinel of -1e9 survives a base of 32 m and
+                    # does not survive one of 96 m, so on high ground a dry
+                    # pixel would come out a hair above the sentinel and read as
+                    # a lake a billion metres down. That is enough to stretch
+                    # the world's height range to a billion metres and quantise
+                    # every real hill in it to the same number.
+                    here = _orient(overlay.surface[cut], r)
+                    here = np.where(here > NO_LIQUID, here + base, NO_LIQUID)
                     pools[iy:iy + px, ix:ix + px] = here
                     kinds[iy:iy + px, ix:ix + px] = _orient(overlay.kind[cut], r)
                     if levels is not None:

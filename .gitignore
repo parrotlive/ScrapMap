@@ -1,9 +1,11 @@
 __pycache__/
 *.py[cod]
 
-# Generated maps
+# Generated maps. These carry a world's name, its seed and every object in it,
+# so they stay on the machine that made them.
 *_map.html
 *_map.png
+*_3d.html
 
 # build_exe.py: the build environment, PyInstaller's scratch, and the 30 MB
 # executable itself. Ship that as a release asset, not in the history.

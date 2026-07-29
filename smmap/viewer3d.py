@@ -504,7 +504,9 @@ out vec4 frag;
 void main() {
   if (vLevel < -1e8) discard;
   float depth = vLevel - solidAt(vUv);
-  if (depth <= 0.0) discard;
+  /* A finger's depth of water over a beach is not water, it is the rounding
+     between two grids that were never going to agree to the millimetre. */
+  if (depth <= 0.03) discard;
   /* A triangle straddling two kinds of pool interpolates between them, so the
      index has to be pinned back inside the array before it is used. */
   int k = clamp(int(vKind + 0.5), 0, 2);
@@ -1041,6 +1043,15 @@ async function start() {
     if (ui.wet.checked) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      /* A shore is where the water surface and the land meet, which means the
+         two are very nearly the same surface there and the depth buffer cannot
+         tell them apart: at a distance the two grids are the same triangles a
+         hair's breadth apart, and the sea speckles with land along every coast
+         in the world. Biasing the water towards the eye by a fraction of a
+         depth unit settles it, and the fragment shader still refuses to draw
+         where the land really is above the surface, so nothing floods. */
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(-1.0, -2.0);
       if (pSea) {
         common(pSea);
         gl.uniformMatrix4fv(pSea.u.uVP, false, vp);
@@ -1052,6 +1063,8 @@ async function start() {
       gl.uniformMatrix4fv(pWater.u.uVP, false, vp);
       gl.uniform2i(pWater.u.uGrid, gx, gy);
       gl.drawArrays(gl.TRIANGLES, 0, verts);
+      gl.polygonOffset(0.0, 0.0);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
       gl.disable(gl.BLEND);
     }
 

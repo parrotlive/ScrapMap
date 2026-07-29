@@ -38,7 +38,7 @@ STRIDE = 36
 # on top, a million objects is a fifty megabyte file. Sorted biggest first,
 # a few hundred thousand keeps every building, ruin, rock and tree in a world
 # and spends what it drops on the smallest scattered foliage.
-DEFAULT_BUDGET = 400_000
+DEFAULT_BUDGET = 800_000
 
 # A prop this small is scenery in the literal sense -- a pebble, a tuft -- and
 # a whole world of them costs more than it shows.
@@ -101,7 +101,10 @@ class MeshLibrary(object):
         hit = self.ids.get(uuid)
         if hit is not None:
             return hit
-        m = self.db.mesh(uuid)
+        # Whatever geometry the asset has. The undergrowth collides with
+        # nothing, so for a quarter of everything a world places the art is the
+        # only shape there is.
+        m = self.db.any_mesh(uuid)
         if m is None:
             self.ids[uuid] = -1
             return -1

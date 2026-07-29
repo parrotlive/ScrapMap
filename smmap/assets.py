@@ -10,8 +10,40 @@ generic blob.
 import glob
 import json
 import os
+import re
 
 import numpy as np
+
+from . import fbx
+
+# A few of the game's catalogues are JSON with line comments in them, which is
+# not JSON at all. One of them is the farming harvestables, and dropping it
+# loses every crop in the world, so the comments are taken out rather than the
+# file. Only comments outside strings go, which is what the alternation does:
+# a quoted run is matched first and put back untouched.
+_COMMENT = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/', re.S)
+
+
+def _strip_comments(text):
+    return _COMMENT.sub(lambda m: m.group(0) if m.group(0)[:1] == '"' else "",
+                        text)
+
+
+def load_json(path):
+    """Read one of the game's JSON files, comments and all, or None."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    try:
+        return json.loads(_strip_comments(text))
+    except ValueError:
+        return None
 
 # Directions used to reduce a collision mesh to a handful of extreme points.
 # The convex hull through them is a close stand-in for the real hull, and small
@@ -73,6 +105,7 @@ _CATEGORY_WORDS = (
     ("road", ("road", "sidewalk", "ditch", "asphalt", "curb", "pavement")),
     ("ground", ("dirtpatch", "sandpatch", "mudpatch", "puddle", "leafpile")),
     ("plant", ("foliage", "tree", "bush", "shrub", "birch", "spruce", "pine",
+               "oak", "willow", "leafy", "seaplant", "sprout", "lilly",
                "leaf", "leaves", "fern", "thorn", "plant", "flower", "sprout",
                "grass", "hay", "corn", "farmable", "crop", "weed", "coral",
                "buxus", "perennial", "clover", "vine", "moss", "stump",
@@ -96,6 +129,11 @@ _ACCENT_WORDS = ("lamp", "light", "glow", "emissive", "stripe", "caution")
 UNIT_BOX = np.array([(x, y, z) for x in (-0.5, 0.5) for y in (-0.5, 0.5)
                      for z in (-0.5, 0.5)], dtype=np.float32)
 
+# How much geometry a thing that collides with nothing may keep. Undergrowth is
+# placed in the tens of thousands and drawn from a distance, and its art carries
+# far more detail than either of those wants to pay for.
+ART_TRIANGLES = 160
+
 
 def _parse_hex_colour(s):
     s = str(s).lstrip("#")
@@ -113,6 +151,7 @@ class AssetDb(object):
         self.by_uuid = {}
         self._shapes = {}
         self._meshes = {}
+        self._art = {}
         self._cats = {}
         self._liquids = {}
         self._scan()
@@ -132,14 +171,19 @@ class AssetDb(object):
             ("ChallengeData/Terrain/Database/AssetSets", "*.assetset"),
             ("Survival/Harvestables/Database/HarvestableSets", "*.harvestableset"),
             ("Data/Harvestables/Database/HarvestableSets", "*.harvestableset"),
+            # Kinematics are the moving furniture -- guardrails, doors, lifts,
+            # rails, the drill bots' gantries. props.py has always read them out
+            # of the tilesons; without their own catalogue here they had no name
+            # and no mesh, so they were placed and then quietly dropped.
+            ("Survival/Kinematics/Database/KinematicSets", "*.kinematicset"),
+            ("Data/Kinematics/Database/KinematicSets", "*.kinematicset"),
+            ("ChallengeData/Kinematics/Database/KinematicSets", "*.kinematicset"),
         ]
         for rel, pat in patterns:
             root = os.path.join(self.game_dir, rel.replace("/", os.sep))
             for f in glob.glob(os.path.join(root, pat)):
-                try:
-                    with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                        doc = json.load(fh)
-                except Exception:
+                doc = load_json(f)
+                if not isinstance(doc, dict):
                     continue
                 for entries in doc.values():
                     if not isinstance(entries, list):
@@ -219,7 +263,7 @@ class AssetDb(object):
 
     # -- collision geometry ----------------------------------------------
 
-    def _obj_path(self, uuid):
+    def _collision_path(self, uuid):
         """Where this asset's collision mesh lives, if it has one to draw.
 
         Assets with no renderable are invisible collision volumes -- trigger
@@ -239,25 +283,62 @@ class AssetDb(object):
         warehouse, a boulder is that boulder. They are simpler than the art the
         game draws -- no texture, fewer faces, and a tree is the trunk and a
         cone rather than every leaf -- but they are the real geometry of the
-        real object, and they are the only geometry that is readable without
-        decoding the engine's own mesh format.
+        real object, in the real place, at the real size.
 
-        Meshes are Y-up; the caller rotates them into the world's Z-up frame.
+        A collision mesh is written either as a plain Wavefront ``.obj`` or as
+        an FBX, and which one is nothing to do with the asset: piers, rubble
+        piles, platforms and half the ruins in a world are FBX purely because
+        of who exported them. Reading only the ``.obj`` half quietly drops two
+        hundred of the six hundred kinds of thing a world stands up.
         """
         if uuid in self._meshes:
             return self._meshes[uuid]
         self._meshes[uuid] = None
-        path = self._obj_path(uuid)
+        path = self._collision_path(uuid)
         if path is None:
             return None
-        try:
-            with open(path, "rb") as fh:
-                text = fh.read().decode("ascii", "replace")
-        except OSError:
-            return None
-        out = _read_obj(text)
+        out = _read_mesh(path)
         self._meshes[uuid] = out
         return out
+
+    def art_mesh(self, uuid, cap=ART_TRIANGLES):
+        """The mesh the game draws this with, for things that collide with none.
+
+        A quarter of everything a world places is undergrowth -- sea plants,
+        buxus, column shrubs, sprouts, sunflowers -- and a player walks through
+        all of it, so none of it has a collision mesh to be drawn from. The only
+        geometry those have is the art, and without it a world comes out mown.
+
+        The coarsest level the game ships is the one taken, since this is scenery
+        seen from a distance, and it is thinned further if it is still dense: a
+        sea plant is a hundred triangles standing in a world a hundred thousand
+        times, and its smallest facets cost more than they show.
+        """
+        if uuid in self._art:
+            return self._art[uuid]
+        self._art[uuid] = None
+        a = self.by_uuid.get(uuid)
+        rend = (a or {}).get("renderable")
+        doc = rend if isinstance(rend, dict) else (
+            load_json(self._expand(rend)) if isinstance(rend, str) else None)
+        lods = (doc or {}).get("lodList") or []
+        if not lods:
+            return None
+        path = lods[-1].get("mesh")
+        if not path:
+            return None
+        path = self._expand(path)
+        if not os.path.isfile(path):
+            return None
+        out = _read_mesh(path)
+        if out is not None and cap and len(out[1]) > cap:
+            out = _thin(out[0], out[1], cap)
+        self._art[uuid] = out
+        return out
+
+    def any_mesh(self, uuid):
+        """Whatever geometry this asset has: what it collides with, or its art."""
+        return self.mesh(uuid) or self.art_mesh(uuid)
 
     def shape(self, uuid):
         """Local-space extreme points (K, 3) of the collision mesh, or None.
@@ -298,6 +379,48 @@ def _face_index(field, n):
     if i < 0:
         return n + i if -i <= n else None
     return None
+
+
+def _read_mesh(path):
+    """(vertices, triangles) from a collision mesh in either format it uses."""
+    if os.path.splitext(path)[1].lower() == ".fbx":
+        try:
+            subs = fbx.read(path, want_uv=False)
+        except Exception:
+            return None
+        subs = [s for s in subs if len(s.pos) and len(s.tris)]
+        if not subs:
+            return None
+        # A collision mesh may still be several nodes -- a pier is its deck and
+        # its piles -- and they are one shape as far as anything here cares.
+        verts, tris, at = [], [], 0
+        for s in subs:
+            verts.append(s.pos)
+            tris.append(s.tris + at)
+            at += len(s.pos)
+        return (np.concatenate(verts).astype(np.float32),
+                np.concatenate(tris).astype(np.uint32))
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("ascii", "replace")
+    except OSError:
+        return None
+    return _read_obj(text)
+
+
+def _thin(verts, tris, cap):
+    """Keep the ``cap`` largest facets of a mesh and drop the rest.
+
+    Facets go smallest first rather than vertices being moved about, so every
+    triangle that survives is exactly where and how big the game made it: a
+    plant loses its finest fronds and keeps its shape.
+    """
+    e1 = verts[tris[:, 1]] - verts[tris[:, 0]]
+    e2 = verts[tris[:, 2]] - verts[tris[:, 0]]
+    area = np.linalg.norm(np.cross(e1, e2), axis=1)
+    keep = tris[np.argpartition(-area, cap)[:cap]]
+    used, faces = np.unique(keep.reshape(-1), return_inverse=True)
+    return verts[used], faces.reshape(-1, 3).astype(np.uint32)
 
 
 def _read_obj(text):

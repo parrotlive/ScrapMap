@@ -43,6 +43,27 @@ LEVEL_SPAN = LEVEL_MAX - 1                     # 16382
 HEIGHT_TEXELS = 1536
 COLOUR_TEXELS = 4096
 
+# What the detail setting is worth to the ground itself. A fixed cap makes the
+# ground mesh the same at every setting -- asking for fine and asking for normal
+# both land on 1536 and give the same land, and the extra time buys nothing you
+# can see. The cap follows the resolution instead, so quick is cheaper, fine is
+# finer, and the floor and ceiling keep either end sensible.
+HEIGHT_TEXELS_MIN = 1024
+HEIGHT_TEXELS_MAX = 3072
+REFERENCE_PX = 32
+
+
+def texel_target(r):
+    """The height-texture cap for a render, from the resolution it was made at.
+
+    Everything that lays the world out must agree on this -- the height, the
+    prop heights, the colour's padding and the extent the objects are placed
+    against -- or the ground and the things standing on it drift apart.
+    """
+    px = getattr(r, "px", REFERENCE_PX) or REFERENCE_PX
+    scaled = int(round(HEIGHT_TEXELS * px / float(REFERENCE_PX)))
+    return max(HEIGHT_TEXELS_MIN, min(HEIGHT_TEXELS_MAX, scaled))
+
 # The tallest prop the shadow texture can describe. Nothing the world generator
 # places comes near it -- the silo is the tallest thing in a survival world and
 # it is well under forty metres.
@@ -97,12 +118,13 @@ def _sea_level(water):
     return float(vals[int(np.argmax(n))])
 
 
-def extent(r, target=HEIGHT_TEXELS):
+def extent(r, target=None):
     """What the textures will cover on the ground, in metres, padding included.
 
     The same answer height_texture gives, without packing a texture to get it,
     for callers that only need to know how big the world is laid out.
     """
+    target = target or texel_target(r)
     f, dh, dw = _blocks(r.height_map.shape[0], r.height_map.shape[1], target)
     mpp = 64.0 / r.px
     return dw * f * mpp, dh * f * mpp
@@ -118,7 +140,7 @@ def _top(r):
             else np.maximum(r.top_map.astype(np.float32), 0.0))
 
 
-def prop_texture(r, target=HEIGHT_TEXELS):
+def prop_texture(r, target=None):
     """How far the props stand above the ground, a byte a texel.
 
     Only the shadow pass wants this. When the props are drawn as real meshes
@@ -128,12 +150,13 @@ def prop_texture(r, target=HEIGHT_TEXELS):
     quarter of a metre, and over most of a world it is zero, which is why the
     whole thing costs a few tens of kilobytes.
     """
+    target = target or texel_target(r)
     f, dh, dw = _blocks(r.height_map.shape[0], r.height_map.shape[1], target)
     top = _reduce(_top(r), f, dh, dw, "max")
     return np.round(np.clip(top / PROP_CEILING, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
-def height_texture(r, target=HEIGHT_TEXELS, props=True):
+def height_texture(r, target=None, props=True):
     """Pack the render's height fields into an (dh, dw, 4) uint8 array.
 
     Returns the array and the numbers needed to read it back: the world height
@@ -145,6 +168,7 @@ def height_texture(r, target=HEIGHT_TEXELS, props=True):
     it off when the buildings are going in as real geometry, or the world gets
     each of them twice: once as a mesh and once as a lump under it.
     """
+    target = target or texel_target(r)
     ground = _ground(r)
     top = _top(r) if props else np.zeros(ground.shape, np.float32)
     water = r.water_level.astype(np.float32)
@@ -213,7 +237,7 @@ def colour_texture(r, cap=COLOUR_TEXELS):
     """
     from PIL import Image
 
-    f, dh, dw = _blocks(r.albedo.shape[0], r.albedo.shape[1], HEIGHT_TEXELS)
+    f, dh, dw = _blocks(r.albedo.shape[0], r.albedo.shape[1], texel_target(r))
     img = Image.fromarray(_pad(r.albedo, f, dh, dw))
     if max(img.size) > cap:
         k = cap / float(max(img.size))
