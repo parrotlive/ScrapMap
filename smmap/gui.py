@@ -348,7 +348,9 @@ class App(object):
             name, path, missing = payload
             self.written.append(path)
             if missing:
-                self._set_status("%s: %d tile kind(s) this install does not have"
+                self._set_status("%s: %d tile kind(s) are not on this PC and "
+                                 "came out purple. They belong to a mod — "
+                                 "subscribe to it and run the game once."
                                  % (name, missing))
         elif kind == "finished":
             self._end()

@@ -9,6 +9,38 @@ in your browser. Nothing to install, nothing to find, nothing to configure.
 
 ![](docs/gui.png)
 
+## New in 2.1 — the places in it
+
+Both maps now know what is in your world and what it is called. A world lays
+down eight hundred or so places, and **Places** lists every one: warehouses, the
+silo district, the ruined city, the mechanic and schematic stations, chemical
+plants, oil pools, minidungeon entrances, camping spots, and all twenty-one
+builder quests by name — a Baguette, a Catapult, a Musicbox.
+
+Tick a kind off in the legend and it goes; search and only what matches stays.
+So *show me only the builder quests* is a question the map can now answer. Click
+a place and the view goes there. Tick the box beside it and it is marked as one
+you have been to, and it stays ticked when you open the page again.
+
+The search runs over the objects as well: type `silo` and the world keeps its
+silos and puts the rest away.
+
+**A map opens without the names.** The pins say a place is there and will still
+take you to it; they do not say what it is. So you can look at a world you have
+not played — how the land lies, how much of it is water — without being told
+where anything is. Press **Names**, or `N`, and everything is named.
+
+**Places are read from the tiles themselves.** The generator does not scatter a
+warehouse about; it lays down a `Warehouse_Exterior_2Floors_256_01` tile, and
+the warehouse is what stands on it. So the tile under a cell names the place,
+and grouping the cells each laying covers finds them all. Nothing is guessed and
+nothing is hand-listed.
+
+The page also got out of the way: five panels became one bar with three tabs,
+all closed to start, and `H` hides even that. There is a Linux launcher now, and
+the view hands back detail when it cannot keep up. See
+[CHANGELOG.md](CHANGELOG.md) for the rest, including what was fixed.
+
 ## New in 2.0 — the world in three dimensions
 
 Tick **3D** and the map stands up. The ground is a real surface at its real
@@ -97,7 +129,33 @@ numpy and Pillow, so there is nothing else to install.
 
 To run it from the source instead, you need Python 3.8+ and you double-click
 `Make map.bat`, which installs `numpy` and `Pillow` the first time if they are
-missing. To build the executable yourself:
+missing.
+
+### On Linux
+
+Run `./make-map.sh` instead — same window, same command line, nothing to
+configure. It finds Python, installs `numpy` and `Pillow` the first time, and
+falls back to a virtual environment in `.venv` when the distribution refuses to
+install into the system Python, which most now do. If `tkinter` is missing it
+says which package to install rather than failing at a traceback.
+
+Scrap Mechanic is a Windows game, so Steam runs it under Proton. That changes
+where its files are but not what is in them: the saves are the same SQLite, the
+tiles are the same tiles. The tool looks inside the game's Proton prefix —
+`steamapps/compatdata/387990/pfx/drive_c/users/steamuser/AppData/...` — across
+every Steam library, and handles the Flatpak and Debian install layouts, both
+spellings of AppData that Wine keeps, and prefixes made before Proton settled
+on the `steamuser` account name.
+
+One thing that has no Windows equivalent: Linux filesystems care about case, and
+the game's data files refer to each other in whatever case its exporter wrote,
+which need not be the case the depot put on disk. Wine hides that from the game;
+it does not hide it from a tool reading those files directly, where one wrong
+letter silently costs a mesh, a texture, or a whole asset set. Paths that do not
+resolve are therefore retried case-insensitively, which costs nothing whenever
+they do.
+
+To build the executable yourself:
 
 ```
 python build_exe.py
@@ -125,7 +183,10 @@ same button stops it.
 `<world>_map.html` beside `ScrapMap.exe` — a single self-contained file (the
 image is embedded, so you can move it anywhere or send it to someone). Drag to
 pan, scroll to zoom, `F` to fit, `1` for 100%. The readout shows cell and world
-coordinates under the cursor, which is handy for `/teleport`.
+coordinates under the cursor, which is handy for `/teleport`, and every place in
+the world is pinned on the map and listed under **Places** — click one to centre
+on it, tick it to mark it found. `H` hides the page's own furniture. Ticks are
+kept under the world's name, so renaming or moving the file does not lose them.
 
 Ground colours come from the game's own terrain textures, so grass, sand, dirt
 and rock read the way they do in game. Relief is hillshaded from the terrain
@@ -138,7 +199,8 @@ pit like the excavation mine left dry however far below the sea it goes.
 
 `--3d`, or the checkbox in the window, writes `<world>_3d.html` instead: the
 same map, standing up. Drag to turn, right-drag or `shift`-drag to move, scroll
-to zoom, `W A S D` to fly, `R` to reset the view and `T` to look straight down.
+to zoom, `W A S D` to fly, `R` to reset the view, `T` to look straight down and
+`H` to put the page's own furniture away.
 The sun moves round the compass and up and down the sky, the relief exaggerates
 from a half to six times for a world that is mostly gentle, and the ground
 detail comes down for a slower machine.
@@ -360,6 +422,7 @@ tiles.
 ```
 ScrapMap.exe        the whole thing in one file (built by build_exe.py)
 Make map.bat        double-click launcher, for running from the source
+make-map.sh         the same, for Linux
 build_exe.py        packs it into the executable
 smmap/
   app.py            where the packaged program starts
@@ -373,6 +436,7 @@ smmap/
   lz4.py            LZ4 block decompressor
   tiles.py          .tile index, LOD decoder, per-cell surface grids
   props.py          .tileson / .prefabson placements, prefab trees flattened
+  poi.py            names the places in a world, from the tiles under them
   assets.py         asset, harvestable and kinematic databases, meshes
   fbx.py            binary and text FBX reader, for the meshes not in .obj
   detail.py         rasterises props and pools into a per-tile overlay

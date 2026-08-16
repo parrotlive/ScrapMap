@@ -185,32 +185,66 @@ def _biome_of(relpath):
 
 
 class TileIndex(object):
-    """uuid -> Tile for every .tile shipped with the game."""
+    """uuid -> Tile for every .tile the game has, its mods included.
 
-    def __init__(self, game_dir):
+    A world may stand on tiles that did not ship with the game: a terrain mod
+    brings its own, and the save names them by uuid like any other. A uuid with
+    no tile behind it is drawn as a purple cell, so a modded world read against
+    the stock folders alone comes out purple from edge to edge.
+    """
+
+    def __init__(self, game_dir, mod_dirs=None):
         self.game_dir = game_dir
         self.by_uuid = {}
+        self.mods = {}           # mod folder name -> how many tiles it supplied
         self._scan()
+        if mod_dirs is None:
+            from . import discover
+            mod_dirs = discover.find_mod_dirs()
+        self._scan_mods(mod_dirs)
+
+    def _scan_root(self, root, base, override=True):
+        """Index every .tile under root, describing paths relative to base."""
+        # The game's folders are named in whatever case the depot shipped, which
+        # only matters on a filesystem that cares. See discover.resolve.
+        from . import discover
+        root = discover.resolve(root)
+        if not os.path.isdir(root):
+            return 0
+        found = 0
+        for path in glob.glob(os.path.join(root, "**", "*.tile"), recursive=True):
+            try:
+                with open(path, "rb") as f:
+                    head = f.read(0x28)
+            except OSError:
+                continue
+            if len(head) < 0x28 or head[:4] != b"TILE":
+                continue
+            uid = uuid_str(head[8:24])
+            # The game's own tile wins a uuid clash: a mod that replaces a stock
+            # tile should not quietly change what an unmodded world looks like.
+            if not override and uid in self.by_uuid:
+                continue
+            cx, cy = struct.unpack_from("<II", head, 0x20)
+            rel = os.path.relpath(path, base)
+            self.by_uuid[uid] = Tile(path, uid, cx, cy, _biome_of(rel))
+            found += 1
+        return found
 
     def _scan(self):
         roots = [os.path.join(self.game_dir, "Survival", "Terrain", "Tiles"),
                  os.path.join(self.game_dir, "Data", "Terrain", "Tiles"),
                  os.path.join(self.game_dir, "Survival", "DungeonTiles")]
         for root in roots:
-            if not os.path.isdir(root):
-                continue
-            for path in glob.glob(os.path.join(root, "**", "*.tile"), recursive=True):
-                try:
-                    with open(path, "rb") as f:
-                        head = f.read(0x28)
-                except OSError:
-                    continue
-                if len(head) < 0x28 or head[:4] != b"TILE":
-                    continue
-                uid = uuid_str(head[8:24])
-                cx, cy = struct.unpack_from("<II", head, 0x20)
-                rel = os.path.relpath(path, self.game_dir)
-                self.by_uuid[uid] = Tile(path, uid, cx, cy, _biome_of(rel))
+            self._scan_root(root, self.game_dir)
+
+    def _scan_mods(self, mod_dirs):
+        """Terrain a mod brought with it. A mod folder is small, so the whole
+        of one is searched rather than guessing where inside it tiles live."""
+        for d in mod_dirs or ():
+            n = self._scan_root(d, d, override=False)
+            if n:
+                self.mods[os.path.basename(d)] = n
 
     def get(self, uuid):
         return self.by_uuid.get(str(uuid))

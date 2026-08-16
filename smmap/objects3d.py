@@ -93,6 +93,7 @@ class MeshLibrary(object):
         self.index = []
         self.spans = []          # index count per mesh; starts follow on packing
         self.bounds = []         # (centre xyz, radius) per mesh, local frame
+        self.uuids = []          # which asset each mesh came from, in mesh order
         self._verts = 0
         self._count = 0
 
@@ -118,6 +119,7 @@ class MeshLibrary(object):
         centre = (lo + hi) * 0.5
         self.bounds.append((centre, float(np.linalg.norm(hi - centre))))
         self.spans.append(len(t) * 3)
+        self.uuids.append(uuid)
         out = self._count
         self._count += 1
         self.ids[uuid] = out
@@ -306,10 +308,16 @@ def _pack(lib, pos, mat, rgb, mesh, rad, seen):
     buf[:, 30:33] = np.clip(rgb, 0, 255).astype(np.uint8)
     buf[:, 33] = np.clip(np.ceil(rad), 1, 255).astype(np.uint8)
 
+    # Each mesh is one asset, so a draw can say what it is drawing. That is what
+    # lets the page offer a legend, a search box and a filter over the objects:
+    # without it every one of them is an anonymous lump of triangles.
+    db = lib.db
     draws = [{"start": int(s), "count": int(c),
               "index": int(spans[m][0]), "elems": int(spans[m][1]),
               "centre": [round(float(x), 4) for x in centres[m]],
-              "radius": round(float(radii[m]), 4)}
+              "radius": round(float(radii[m]), 4),
+              "name": db.name(lib.uuids[m]) or "unnamed",
+              "cat": db.category(lib.uuids[m])}
              for m, (s, c) in enumerate(zip(starts.tolist(), counts.tolist()))
              if c]
     return {

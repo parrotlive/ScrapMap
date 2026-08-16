@@ -69,6 +69,7 @@ def write_map3d(path, r, cd, info, save, db=None, objects=False,
     as bumps in the ground, which needs the asset database the render used.
     """
     from . import objects3d
+    from . import poi
     from . import terrain3d
     from . import viewer3d
 
@@ -76,12 +77,14 @@ def write_map3d(path, r, cd, info, save, db=None, objects=False,
         raise RuntimeError("the render did not keep its fields; "
                            "call MapRenderer.render(fields=True)")
 
+    span = terrain3d.extent(r)
     solid = None
     if objects and db is not None and r.baker is not None:
         kw = {} if budget is None else {"budget": budget}
-        solid = objects3d.collect(r, db, r.baker.loader, terrain3d.extent(r),
+        solid = objects3d.collect(r, db, r.baker.loader, span,
                                   progress=progress, **kw)
 
+    places = _placed(poi.collect(r), r, span)
     height, meta = terrain3d.payload(r, cd, objects=solid is not None)
     prop = terrain3d.prop_texture(r) if solid is not None else None
     colour = terrain3d.colour_texture(r)
@@ -95,10 +98,29 @@ def write_map3d(path, r, cd, info, save, db=None, objects=False,
         stats.append(("geometry", "%s kinds, %s triangles"
                       % (format(s["meshes"], ",d"),
                          format(s["triangles"], ",d"))))
+    if places:
+        stats.append(("places", "%d in %d kinds"
+                      % (len(places), len(poi.summary(places)))))
     viewer3d.write_html(path, colour, height, meta, stats, save.name,
                         "Scrap Mechanic survival world  ·  1 cell = 64 m",
-                        prop=prop, objects=solid)
+                        prop=prop, objects=solid, places=places)
     return path
+
+
+def _placed(places, r, span):
+    """Put each place where the solid viewer lays the world out.
+
+    The same frame objects3d puts the props in: east stays east, height stays
+    height, and north becomes negative south, all measured from the middle of
+    the padded extent the terrain mesh covers.
+    """
+    left = r.x0 * 64.0 + span[0] * 0.5
+    top = (r.y1 + 1) * 64.0 - span[1] * 0.5
+    for p in places:
+        p["x"] = round((p["cx"] + 0.5) * 64.0 - left, 2)
+        p["z"] = round(top - (p["cy"] + 0.5) * 64.0, 2)
+        p["y"] = p.pop("h")
+    return places
 
 
 def _world_stats(r, cd, info, save):
@@ -125,10 +147,16 @@ def _world_stats(r, cd, info, save):
 
 
 def _write_viewer(path, img, r, cd, info, save):
+    from . import poi
+
     top = sorted(r.used.items(), key=lambda kv: -kv[1])[:1]
     stats = _world_stats(r, cd, info, save)
     if top:
         stats.append(("most common", top[0][0]))
+    places = poi.collect(r)
+    if places:
+        stats.append(("places", "%d in %d kinds"
+                      % (len(places), len(poi.summary(places)))))
 
     legend = [
         ("Grass", palette.BASE_RGB),
@@ -145,4 +173,5 @@ def _write_viewer(path, img, r, cd, info, save):
     meta = {"w": img.width, "h": img.height, "px": r.px,
             "x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}
     subtitle = "Scrap Mechanic survival world  ·  1 cell = 64 m"
-    viewer.write_html(path, img, meta, stats, legend, save.name, subtitle)
+    viewer.write_html(path, img, meta, stats, legend, save.name, subtitle,
+                      places=places)

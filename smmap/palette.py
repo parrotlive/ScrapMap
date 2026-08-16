@@ -45,8 +45,10 @@ def recompute_from_game(game_dir):
     import numpy as np
     from PIL import Image
 
-    cfg = os.path.join(game_dir, "Data", "Terrain", "Materials",
-                       "gnd_standard_materialset.json")
+    from . import discover
+
+    cfg = discover.resolve(os.path.join(game_dir, "Data", "Terrain", "Materials",
+                                        "gnd_standard_materialset.json"))
     with open(cfg, "r", encoding="utf-8", errors="replace") as f:
         textures = json.load(f)["groundMaterials"]["textures"]
 
@@ -55,7 +57,7 @@ def recompute_from_game(game_dir):
         p = (t["diffuse"].replace("$GAME_DATA", os.path.join(game_dir, "Data"))
                           .replace("$SURVIVAL_DATA", os.path.join(game_dir, "Survival"))
                           .replace("/", os.sep))
-        with Image.open(p) as im:
+        with Image.open(discover.resolve(p)) as im:
             a = np.asarray(im.convert("RGB")).reshape(-1, 3)
         out.append(tuple(int(round(v)) for v in a.mean(axis=0)))
     return out[:8], (out[8] if len(out) > 8 else BASE_RGB)

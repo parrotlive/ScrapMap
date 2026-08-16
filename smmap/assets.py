@@ -14,6 +14,7 @@ import re
 
 import numpy as np
 
+from . import discover
 from . import fbx
 
 # A few of the game's catalogues are JSON with line comments in them, which is
@@ -159,10 +160,11 @@ class AssetDb(object):
     # -- catalogue --------------------------------------------------------
 
     def _expand(self, path):
-        return (path.replace("$SURVIVAL_DATA", os.path.join(self.game_dir, "Survival"))
-                    .replace("$GAME_DATA", os.path.join(self.game_dir, "Data"))
-                    .replace("$CHALLENGE_DATA", os.path.join(self.game_dir, "ChallengeData"))
-                    .replace("/", os.sep))
+        p = (path.replace("$SURVIVAL_DATA", os.path.join(self.game_dir, "Survival"))
+                 .replace("$GAME_DATA", os.path.join(self.game_dir, "Data"))
+                 .replace("$CHALLENGE_DATA", os.path.join(self.game_dir, "ChallengeData"))
+                 .replace("/", os.sep))
+        return discover.resolve(p)
 
     def _scan(self):
         patterns = [
@@ -180,7 +182,8 @@ class AssetDb(object):
             ("ChallengeData/Kinematics/Database/KinematicSets", "*.kinematicset"),
         ]
         for rel, pat in patterns:
-            root = os.path.join(self.game_dir, rel.replace("/", os.sep))
+            root = discover.resolve(
+                os.path.join(self.game_dir, rel.replace("/", os.sep)))
             for f in glob.glob(os.path.join(root, pat)):
                 doc = load_json(f)
                 if not isinstance(doc, dict):

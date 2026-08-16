@@ -28,6 +28,22 @@ def _fail(msg, hint=None):
     return 2
 
 
+def _example_game_dir():
+    if os.name == "nt":
+        return "\"C:\\...\\steamapps\\common\\Scrap Mechanic\""
+    return "\"~/.steam/steam/steamapps/common/Scrap Mechanic\""
+
+
+def _example_save_dir():
+    """Where to tell someone to look, in the place their saves actually are."""
+    if os.name == "nt":
+        return "%APPDATA%\\Axolot Games\\Scrap Mechanic\\User"
+    # On Linux the game runs under Proton, so its AppData is inside the prefix.
+    return ("~/.steam/steam/steamapps/compatdata/%s/pfx/drive_c/users/"
+            "steamuser/AppData/Roaming/Axolot Games/Scrap Mechanic/User"
+            % discover.APPID)
+
+
 def pick_save(saves, wanted=None):
     """Choose a save. Newest survival world unless the user named one."""
     if wanted:
@@ -92,13 +108,13 @@ def main(argv=None):
     game = args.game or discover.find_game()
     if not game:
         return _fail("Could not find your Scrap Mechanic installation.",
-                     "Pass it with --game \"C:\\...\\steamapps\\common\\Scrap Mechanic\"")
+                     "Pass it with --game %s" % _example_game_dir())
     print("  game   %s" % game)
 
     saves = discover.find_saves()
     if not saves:
         return _fail("No Scrap Mechanic saves found.",
-                     "Expected them under %%APPDATA%%\\Axolot Games\\Scrap Mechanic\\User")
+                     "Expected them under %s" % _example_save_dir())
 
     if args.list:
         print("\n  %-28s %-10s %8s  %s" % ("SAVE", "FOLDER", "SIZE", "LAST PLAYED"))
@@ -111,6 +127,9 @@ def main(argv=None):
     if not index:
         return _fail("Found the game but no terrain tiles in it.",
                      "Is %s a complete install?" % game)
+    if index.mods:
+        print("  mods   %d tile(s) from %d mod folder(s)"
+              % (sum(index.mods.values()), len(index.mods)))
 
     # The asset database is loaded even without structures: the world's water is
     # placed as assets too, and a map with no sea would be a stranger answer
@@ -222,8 +241,10 @@ def render_one(save, index, args):
             output.write_map(path, img, r, cd, info, save, png=want_png)
             print("         %s  (%d x %d)" % (path, img.width, img.height))
         if r.missing:
-            print("         note: %d tile id(s) not in this install were drawn purple"
-                  % len(r.missing))
+            print("         note: %d tile kind(s) are in this world but not on "
+                  "this PC, and came out purple." % len(r.missing))
+            print("               They belong to a mod. Subscribe to it, or run "
+                  "the game once so Steam fetches it.")
         return path
 
 

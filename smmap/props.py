@@ -20,6 +20,7 @@ import os
 
 import numpy as np
 
+from . import discover
 from .assets import euler_matrices
 
 _KINDS = ("assets", "harvestables", "kinematics")
@@ -79,7 +80,7 @@ class PropLoader(object):
                  .replace("$GAME_DATA", os.path.join(self.game_dir, "Data"))
                  .replace("$CHALLENGE_DATA", os.path.join(self.game_dir, "ChallengeData"))
                  .replace("/", os.sep))
-        return os.path.splitext(p)[0] + ".prefabson"
+        return discover.resolve(os.path.splitext(p)[0] + ".prefabson")
 
     def expand(self, path):
         """Every prop in a .tileson or .prefabson, nested prefabs included."""

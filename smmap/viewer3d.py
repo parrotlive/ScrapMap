@@ -35,55 +35,206 @@ PAGE = r"""<!doctype html>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { margin:0; height:100%; background:#0a0e14; color:#e8edf5;
-       font:13px/1.5 "Segoe UI", system-ui, sans-serif; overflow:hidden; }
+  /* Any rule below that sets a display beats the browser's own [hidden], and
+     several of them do -- which is what put the object controls on a page that
+     had no objects to control. Say it once, here, and hidden means hidden. */
+  [hidden] { display:none !important; }
+  /* Black, one grey, one red, and no rounded corners anywhere. The chrome is
+     monospace and set in capitals so it reads as instrumentation over the
+     world rather than as a second thing competing with it for attention. */
+  :root {
+    --bg:#000; --panel:#161614; --line:#2a2a28; --line2:#3a3a37;
+    --fg:#fff; --dim:#8f8f8f; --red:#f00;
+    --mono:ui-monospace,"Cascadia Mono","Segoe UI Mono",Consolas,monospace;
+  }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+       font:12px/1.45 var(--mono); overflow:hidden; }
   #stage { position:absolute; inset:0; touch-action:none; user-select:none;
-       -webkit-user-select:none; cursor:grab; }
+       -webkit-user-select:none; cursor:crosshair; }
   #stage.drag { cursor:grabbing; }
   #gl { display:block; width:100%; height:100%; }
   #wait { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-       color:#6d7f97; font-size:12px; letter-spacing:.3px; text-align:center; }
-  .panel { position:absolute; background:rgba(14,19,27,.86); border:1px solid #2b3444;
-       border-radius:10px; padding:10px 13px; backdrop-filter:blur(8px); }
-  #info { top:12px; left:12px; max-width:320px; }
-  #info h1 { margin:0 0 2px; font-size:15px; font-weight:600; letter-spacing:.2px; }
-  #info .sub { color:#8fa0b8; font-size:11.5px; }
-  #stats { margin-top:9px; display:grid; grid-template-columns:auto auto;
-       gap:2px 14px; font-size:11.5px; }
-  #stats b { font-weight:600; color:#cfe0f5; }
-  #stats span { color:#8fa0b8; }
-  #ctl { top:12px; right:12px; width:212px; }
-  #ctl label { display:block; margin:0 0 9px; font-size:11.5px; color:#a9b9cf; }
+       color:var(--dim); font-size:11px; letter-spacing:.14em;
+       text-transform:uppercase; text-align:center; }
+
+  /* ---- the bar: the only thing that is always on screen ---- */
+  #bar { position:absolute; top:0; left:0; right:0; height:30px; display:flex;
+       align-items:stretch; background:var(--bg);
+       border-bottom:1px solid var(--line); font-size:11px; }
+  #bar .name { display:flex; align-items:center; padding:0 14px; color:var(--fg);
+       letter-spacing:.1em; text-transform:uppercase; white-space:nowrap;
+       overflow:hidden; text-overflow:ellipsis; max-width:34vw;
+       border-right:1px solid var(--line); }
+  #bar button { appearance:none; background:none; border:0;
+       border-right:1px solid var(--line); color:var(--dim); font:inherit;
+       letter-spacing:.1em; text-transform:uppercase; padding:0 14px;
+       cursor:pointer; }
+  #bar button:hover { color:var(--fg); background:var(--panel); }
+  #bar button.on { color:var(--red); background:var(--panel); }
+  #bar .gap { flex:1; }
+  #bar .read { display:flex; align-items:center; gap:14px; padding:0 14px;
+       color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap;
+       text-transform:uppercase; letter-spacing:.1em;
+       border-left:1px solid var(--line); }
+  #bar .read b { color:var(--fg); font-weight:400; }
+  #show { position:absolute; top:0; left:0; z-index:5; background:var(--bg);
+       border:0; border-right:1px solid var(--line);
+       border-bottom:1px solid var(--line); color:var(--dim); font:inherit;
+       font-size:11px; padding:7px 12px; cursor:pointer; letter-spacing:.1em; }
+  #show:hover { color:var(--fg); }
+  #show { text-transform:uppercase; }
+  body.bare #bar, body.bare .panel, body.bare #help { display:none; }
+  body.bare #markers { display:none; }
+
+  /* ---- panels: one at a time, hung under the bar ---- */
+  .panel { position:absolute; top:30px; left:0; width:296px;
+       background:var(--panel); border-right:1px solid var(--line);
+       border-bottom:1px solid var(--line);
+       max-height:calc(100% - 58px); display:flex; flex-direction:column; }
+  /* The places panel is the one with a list in it, so it is given a height to
+     fill rather than left to hug three rows of content. */
+  #places { height:min(620px, calc(100% - 58px)); }
+  .panel h2 { margin:0; padding:9px 14px 7px; font-size:10px; font-weight:400;
+       letter-spacing:.14em; text-transform:uppercase; color:var(--dim);
+       border-bottom:1px solid var(--line); display:flex;
+       justify-content:space-between; gap:10px; }
+  .panel h2 em { font-style:normal; color:var(--fg); }
+  .pad { padding:10px 14px; }
+
+  .sub { margin:0 0 10px; color:var(--dim); font-size:10px; letter-spacing:.06em;
+       text-transform:uppercase; }
+  #stats { display:grid; grid-template-columns:auto 1fr; gap:3px 12px;
+       font-size:11px; }
+  #stats span { color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  #stats b { font-weight:400; text-align:right;
+       font-variant-numeric:tabular-nums; }
+
+  /* ---- the view controls ---- */
+  #ctl label { display:block; margin:0 0 10px; font-size:11px; color:var(--dim); }
   #ctl label:last-child { margin-bottom:0; }
-  #ctl .row { display:flex; justify-content:space-between; margin-bottom:3px; }
-  #ctl .row b { color:#e8edf5; font-weight:600; font-variant-numeric:tabular-nums; }
-  #ctl input[type=range] { width:100%; display:block; accent-color:#5b8fd6;
-       margin:0; height:16px; }
-  #ctl select { width:100%; background:#1a2230; color:#dce7f5; border:1px solid #38455a;
-       border-radius:5px; padding:3px 5px; font:inherit; font-size:11.5px; }
-  #ctl .check { display:flex; align-items:center; gap:7px; }
-  #ctl .check input { accent-color:#5b8fd6; margin:0; }
-  #help { bottom:12px; left:12px; color:#8fa0b8; font-size:11.5px; }
-  #help b { color:#cfe0f5; font-weight:600; }
-  #hud { bottom:12px; right:12px; font-variant-numeric:tabular-nums;
-       font-size:11.5px; color:#a9b9cf; }
-  #hud b { color:#e8edf5; font-weight:600; }
-  #oops { max-width:420px; left:50%; top:50%; transform:translate(-50%,-50%);
-       line-height:1.6; }
-  #oops h2 { margin:0 0 6px; font-size:14px; }
-  #oops p { margin:0; color:#a9b9cf; font-size:12px; }
+  #ctl .row { display:flex; justify-content:space-between; margin-bottom:4px;
+       text-transform:uppercase; letter-spacing:.06em; }
+  #ctl .row b { color:var(--fg); font-weight:400;
+       font-variant-numeric:tabular-nums; }
+  #ctl input[type=range] { width:100%; display:block; accent-color:var(--red);
+       margin:0; height:14px; }
+  #ctl select { width:100%; background:var(--bg); color:var(--fg);
+       border:1px solid var(--line2); border-radius:0; padding:4px 6px;
+       font:inherit; font-size:11px; }
+  #ctl .check { display:flex; align-items:center; gap:9px;
+       text-transform:uppercase; letter-spacing:.06em; }
+  #ctl .check input { accent-color:var(--red); margin:0; }
+
+  /* ---- places ---- */
+  #find { display:block; width:100%; padding:7px 14px; background:var(--bg);
+       color:var(--fg); border:0; border-bottom:1px solid var(--line);
+       border-radius:0; font:inherit; font-size:11px; letter-spacing:.06em; }
+  #find::placeholder { color:#5c5c58; text-transform:uppercase; }
+  #find:focus { outline:none; color:var(--fg); }
+  /* Both lists shrink when the window is short, but neither may be squeezed to
+     nothing: without a floor the legend collapses to a single row and stops
+     being a legend at all. The list takes what the legend leaves. */
+  /* Ticking twenty-five kinds one at a time is what these are for. */
+  .pick { display:flex; border-bottom:1px solid var(--line); }
+  .pick button { flex:1; appearance:none; background:none; border:0;
+       border-right:1px solid var(--line); color:var(--dim); font:inherit;
+       font-size:10px; letter-spacing:.1em; text-transform:uppercase;
+       padding:6px 0; cursor:pointer; }
+  .pick button:last-child { border-right:0; }
+  .pick button:hover { color:var(--fg); background:var(--bg); }
+  #kinds { flex:0 1 auto; overflow:auto; min-height:56px; max-height:176px;
+       padding:8px 14px; }
+  #list { flex:1 1 74px; overflow:auto; min-height:74px; padding:8px 14px;
+       border-top:1px solid var(--line); }
+  #list .none { color:var(--dim); font-size:10px; padding:2px 0;
+       text-transform:uppercase; letter-spacing:.06em; }
+  .krow, .prow { display:flex; align-items:center; gap:9px; padding:3px 0;
+       font-size:11px; cursor:pointer; }
+  .krow input, .prow input { accent-color:var(--red); margin:0; flex:none; }
+  /* Square, because nothing here is round. */
+  .dot { width:7px; height:7px; flex:none; }
+  .krow { color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .krow:hover { color:var(--fg); }
+  .krow .n { margin-left:auto; color:#5c5c58;
+       font-variant-numeric:tabular-nums; }
+  .prow { color:var(--dim); }
+  .prow:hover { color:var(--fg); }
+  .prow .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prow.done .nm { text-decoration:line-through; color:#5c5c58; }
+  .prow .d { margin-left:auto; color:#5c5c58; font-size:10px; flex:none;
+       font-variant-numeric:tabular-nums; }
+  #cats { margin:-4px 0 10px; }
+  #cats .krow { display:flex; align-items:center; gap:9px; margin:0;
+       padding:2px 0; }
+
+  /* ---- place labels over the world ---- */
+  #markers { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .mk { position:absolute; transform:translate(-50%,-100%); pointer-events:auto;
+       cursor:pointer; white-space:nowrap; font-size:10px; line-height:1;
+       letter-spacing:.06em; text-transform:uppercase; padding:4px 7px;
+       background:var(--bg); border:1px solid var(--line2); color:var(--fg);
+       display:flex; align-items:center; gap:6px; }
+  .mk:hover { border-color:var(--red); z-index:2; }
+  .mk.done { color:#5c5c58; border-color:var(--line); }
+  .mk i { font-style:normal; }
+  /* Spoiler-free: the pin still says a place is here and still flies you to
+     it, it just does not say what it is. */
+  .mk.mute { padding:4px; }
+  .mk.mute i { display:none; }
+
+  #help { position:absolute; bottom:0; left:0; right:0; padding:7px 14px;
+       color:#5c5c58; font-size:10px; letter-spacing:.06em;
+       text-transform:uppercase; border-top:1px solid var(--line);
+       background:var(--bg); }
+  #help b { color:var(--dim); font-weight:400; }
+  #oops { max-width:430px; left:50%; top:50%; width:auto;
+       transform:translate(-50%,-50%); border:1px solid var(--line2);
+       padding:16px 18px; line-height:1.6; }
+  #oops h2 { border:0; padding:0 0 6px; font-size:11px; color:var(--fg); }
+  #oops p { margin:0; color:var(--dim); font-size:11px; text-transform:none;
+       letter-spacing:0; }
 </style>
 
 <div id="stage"><canvas id="gl"></canvas>
+  <div id="markers"></div>
   <div id="wait">unpacking the world&hellip;</div></div>
 
-<div class="panel" id="info">
-  <h1>__NAME__</h1>
-  <div class="sub">__SUBTITLE__</div>
-  <div id="stats">__STATS__</div>
+<button id="show" hidden>&plus; Show</button>
+
+<div id="bar">
+  <span class="name">__NAME__</span>
+  <button data-panel="info">World</button>
+  <button data-panel="places" id="placesTab" hidden>Places</button>
+  <button data-panel="ctl">View</button>
+  <button id="names" hidden
+          title="Show what each place is called (N). Off, the map says where things are without telling you what they are.">Names</button>
+  <button id="hide" title="Hide everything (H)">Hide</button>
+  <span class="gap"></span>
+  <span class="read"><b id="eye">-</b> <b id="fps">-</b></span>
 </div>
 
-<div class="panel" id="ctl">
+<div class="panel" id="info" hidden>
+  <h2>World</h2>
+  <div class="pad">
+    <p class="sub">__SUBTITLE__</p>
+    <div id="stats">__STATS__</div>
+  </div>
+</div>
+
+<div class="panel" id="places" hidden>
+  <h2>Places <em id="placeCount"></em></h2>
+  <input id="find" type="search" placeholder="Search places and objects"
+         autocomplete="off" spellcheck="false">
+  <div class="pick">
+    <button data-pick="all">All</button>
+    <button data-pick="none">None</button>
+    <button data-pick="invert">Invert</button>
+  </div>
+  <div id="kinds"></div>
+  <div id="list"></div>
+</div>
+
+<div class="panel pad" id="ctl" hidden>
   <label><span class="row"><span>Sun direction</span><b id="azOut">315&deg;</b></span>
     <input id="az" type="range" min="0" max="359" value="315"></label>
   <label><span class="row"><span>Sun height</span><b id="elOut">38&deg;</b></span>
@@ -96,22 +247,25 @@ PAGE = r"""<!doctype html>
       <option value="0.5" selected>Normal</option>
       <option value="1">High</option>
     </select></label>
+  <label class="check"
+         title="When the view cannot keep up, give back detail until it can -- the ground first, then how far the small objects carry, then the shadows. Nothing is thrown away: it all comes back when the view is still again.">
+    <input id="autoperf" type="checkbox" checked> Performance mode</label>
   <label class="check"><input id="shadows" type="checkbox" checked> Shadows</label>
   <label class="check"><input id="wet" type="checkbox" checked> Water</label>
   <label class="check" id="objRow" hidden><input id="objs" type="checkbox" checked>
     Objects</label>
+  <div id="cats" hidden></div>
   <label id="reachRow" hidden
          title="How far a one-metre object is drawn. Bigger things carry proportionally further, so a warehouse is visible long after the bushes around it have gone.">
     <span class="row"><span>Object range</span><b id="reachOut">250 m</b></span>
     <input id="reach" type="range" min="40" max="700" value="250"></label>
 </div>
 
-<div class="panel" id="help">
-  drag to turn &middot; right-drag or <b>shift</b>-drag to move &middot; scroll to zoom<br>
-  <b>R</b> reset view &middot; <b>T</b> straight down &middot; <b>W A S D</b> move
+<div id="help">
+  drag turn &middot; <b>shift</b>-drag move &middot; scroll zoom &middot;
+  <b>W A S D</b> fly &middot; <b>R</b> reset &middot; <b>T</b> top &middot;
+  <b>N</b> names &middot; <b>H</b> hide
 </div>
-
-<div class="panel" id="hud">eye <b id="eye">-</b> &nbsp; <b id="fps">-</b></div>
 
 <script>
 const META = __META__;
@@ -124,6 +278,13 @@ const OBJ_VERTS = __OBJ_VERTS__;
 const OBJ_INDEX = __OBJ_INDEX__;
 const OBJ_INST = __OBJ_INST__;
 const OBJ_STRIDE = 36;
+/* Every place the generator laid down, already in the frame the world is drawn
+   in. Empty when the render had no tile map to read them off. */
+const PLACES = __PLACES__;
+const WORLD_KEY = __WORLD_KEY__;
+/* The map colour each object category is drawn as, so the legend's dots match
+   what is actually on the ground. */
+const CAT_RGB = __CAT_RGB__;
 
 /* ---------------------------------------------------------------- matrices */
 /* Just enough 4x4 to place a camera and to turn a pixel back into a ray. */
@@ -723,13 +884,43 @@ const ui = {
   az: document.getElementById('az'), el: document.getElementById('el'),
   ex: document.getElementById('ex'), detail: document.getElementById('detail'),
   shadows: document.getElementById('shadows'), wet: document.getElementById('wet'),
-  objs: document.getElementById('objs'), reach: document.getElementById('reach')
+  objs: document.getElementById('objs'), reach: document.getElementById('reach'),
+  autoperf: document.getElementById('autoperf')
 };
 if (OBJ_DRAWS && OBJ_DRAWS.length) {
   document.getElementById('objRow').hidden = false;
   document.getElementById('reachRow').hidden = false;
 }
 let exag = 1, shadowStale = true;
+
+/* --------------------------------------------------------------- the chrome */
+/* The world is the thing worth looking at, so everything else starts put away
+   and only one panel is ever open at a time. Hide takes even the bar off and
+   leaves a single way back. */
+
+const bar = document.getElementById('bar');
+const showBtn = document.getElementById('show');
+const tabs = [...bar.querySelectorAll('button[data-panel]')];
+const panels = {
+  info: document.getElementById('info'),
+  places: document.getElementById('places'),
+  ctl: document.getElementById('ctl')
+};
+let openPanel = null;
+
+function openOnly(which) {
+  openPanel = openPanel === which ? null : which;
+  for (const name of Object.keys(panels)) panels[name].hidden = name !== openPanel;
+  for (const b of tabs) b.classList.toggle('on', b.dataset.panel === openPanel);
+}
+for (const b of tabs) b.addEventListener('click', () => openOnly(b.dataset.panel));
+
+function setBare(on) {
+  document.body.classList.toggle('bare', on);
+  showBtn.hidden = !on;
+}
+document.getElementById('hide').addEventListener('click', () => setBare(true));
+showBtn.addEventListener('click', () => setBare(false));
 
 function sunVec() {
   const a = ui.az.value * Math.PI / 180, e = ui.el.value * Math.PI / 180;
@@ -766,8 +957,8 @@ stage.addEventListener('pointermove', e => {
        the cursor moved, which depends on how far away the ground is. */
     const k = cam.dist * 0.0018;
     const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw);
-    cam.tx -= (dx * c - dy * s) * k;
-    cam.tz += (dx * s + dy * c) * k;
+    cam.tx -= (dx * c + dy * s) * k;
+    cam.tz += (dx * s - dy * c) * k;
   } else {
     cam.yaw -= dx * 0.005;
     cam.pitch = Math.min(1.553, Math.max(0.02, cam.pitch + dy * 0.005));
@@ -790,8 +981,18 @@ stage.addEventListener('wheel', e => {
 }, { passive: false });
 
 const held = new Set();
+/* A key pressed into the search box is a letter being typed, not a command:
+   without this, searching for a warehouse flies the camera across the world. */
+function typing(e) {
+  const t = e.target;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'SELECT'
+                 || t.tagName === 'TEXTAREA' || t.isContentEditable);
+}
 addEventListener('keydown', e => {
+  if (typing(e)) return;
   const k = e.key.toLowerCase();
+  if (k === 'h') { setBare(!document.body.classList.contains('bare')); return; }
+  if (k === 'n' && !namesBtn.hidden) { setNames(!namesOn); return; }
   if (k === 'r') { reset(); return; }
   if (k === 't') { cam.pitch = 1.553; return; }
   if ('wasdqe'.includes(k)) held.add(k);
@@ -809,6 +1010,331 @@ function fly(dt) {
   if (held.has('d')) { cam.tx += c * k; cam.tz -= s * k; }
   if (held.has('q')) cam.yaw += dt * 1.2;
   if (held.has('e')) cam.yaw -= dt * 1.2;
+}
+
+/* -------------------------------------------------------------- the places */
+/* Every landmark the generator laid down, with a legend to tell the kinds
+   apart, a search that runs over the places and the objects alike, and a note
+   of the ones you have already been to.
+
+   The labels are ordinary elements laid over the canvas and moved each frame.
+   Text the browser lays out is sharper and cheaper than text drawn into a
+   texture, and it can be clicked without a picking pass. */
+
+const MAX_MARKERS = 18;          /* labels on screen at once */
+/* The labels are monospace, so a label's width on screen follows from the
+   number of characters in it -- which is what lets one be kept clear of
+   another without measuring anything the browser would have to lay out. */
+const CHAR_W = 6.7, LABEL_PAD = 27, LABEL_H = 19;
+const LIST_CAP = 250;            /* rows before the list asks you to search */
+/* The generator's filler variants outnumber the real landmarks several times
+   over, so the legend starts with them off and the world reads before you have
+   touched anything. */
+const OFF_BY_DEFAULT = ['Random Site'];
+const CAT_LABEL = { build: 'Buildings', road: 'Roads', plant: 'Plants',
+                    rock: 'Rocks', wreck: 'Wrecks', ground: 'Ground' };
+
+const markersBox = document.getElementById('markers');
+const kindsBox = document.getElementById('kinds');
+const listBox = document.getElementById('list');
+const catsBox = document.getElementById('cats');
+const findBox = document.getElementById('find');
+const placeCount = document.getElementById('placeCount');
+
+const kinds = new Map();         /* kind -> {n, on} */
+const cats = new Map();          /* object category -> {n, on} */
+const found = new Set();         /* the ones ticked off */
+let shown = [];                  /* places passing the legend and the search */
+let visibleDraws = OBJ_DRAWS || [];
+let objMatch = 0;
+/* A map of a world you have not played yet should not hand you the answers.
+   Off, the pins say a place is there and will still fly you to it; they do not
+   say what it is, and the list gives coordinates rather than names. */
+let namesOn = false;
+
+const STORE = 'scrapmap:' + WORLD_KEY;
+try {
+  for (const id of JSON.parse(localStorage.getItem(STORE) || '[]')) found.add(id);
+} catch (e) { /* a browser with storage refused is not a reason to fail */ }
+function remember() {
+  try { localStorage.setItem(STORE, JSON.stringify([...found])); } catch (e) {}
+}
+
+const idOf = p => p.kind + '|' + p.cx + ',' + p.cy;
+const titleOf = p => p.what ? p.kind + ' · ' + p.what : p.kind;
+const compact = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
+                   : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+
+/* A stable colour per kind: a warehouse is the same colour in the legend, on
+   its label, and every time the page is opened. */
+function kindColour(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return 'hsl(' + (h % 360) + ' 60% 63%)';
+}
+
+function tickRow(colour, label, count, on, onChange) {
+  const row = document.createElement('label');
+  row.className = 'krow';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = on;
+  box.addEventListener('change', () => onChange(box.checked));
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.style.background = colour;
+  const name = document.createElement('span');
+  name.textContent = label;
+  const n = document.createElement('span');
+  n.className = 'n';
+  n.textContent = count;
+  row.append(box, dot, name, n);
+  return row;
+}
+
+function buildKinds() {
+  const tally = new Map();
+  for (const p of PLACES) tally.set(p.kind, (tally.get(p.kind) || 0) + 1);
+  const order = [...tally.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  for (const [kind, n] of order) {
+    const state = { n: n, on: OFF_BY_DEFAULT.indexOf(kind) < 0 };
+    kinds.set(kind, state);
+    const row = tickRow(kindColour(kind), kind, n, state.on, on => {
+      state.on = on;
+      refresh();
+    });
+    // So All/None/Invert can find the box that belongs to each kind.
+    row.querySelector('input').dataset.kind = kind;
+    kindsBox.append(row);
+  }
+}
+
+function buildCats() {
+  if (!OBJ_DRAWS || !OBJ_DRAWS.length) return;
+  const tally = new Map();
+  for (const d of OBJ_DRAWS) tally.set(d.cat, (tally.get(d.cat) || 0) + d.count);
+  const order = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [cat, n] of order) {
+    const state = { n: n, on: true };
+    cats.set(cat, state);
+    const rgb = CAT_RGB[cat] || [140, 140, 140];
+    catsBox.append(tickRow('rgb(' + rgb.join(',') + ')',
+                           CAT_LABEL[cat] || cat, compact(n), true, on => {
+      state.on = on;
+      refresh();
+    }));
+  }
+  catsBox.hidden = false;
+}
+
+function refresh() {
+  const q = findBox.value.trim().toLowerCase();
+  shown = PLACES.filter(p => {
+    const k = kinds.get(p.kind);
+    if (!k || !k.on) return false;
+    if (!q) return true;
+    return (p.kind + ' ' + p.what + ' ' + p.tile).toLowerCase().includes(q);
+  });
+
+  /* The objects answer the same search box. With nothing typed, everything the
+     categories allow is drawn; with something typed that names an object, only
+     those -- which is what makes "silo" show you the silos and nothing else.
+     A search that names no object at all leaves the objects alone rather than
+     emptying the world. */
+  const all = OBJ_DRAWS || [];
+  const named = q ? all.filter(d => d.name.toLowerCase().includes(q)) : null;
+  objMatch = named ? named.length : 0;
+  visibleDraws = (objMatch ? named : all).filter(d => {
+    const c = cats.get(d.cat);
+    return !c || c.on;
+  });
+
+  placeCount.textContent = shown.length === PLACES.length
+    ? PLACES.length : shown.length + ' of ' + PLACES.length;
+  drawList();
+}
+
+function drawList() {
+  listBox.textContent = '';
+  if (objMatch) {
+    const note = document.createElement('div');
+    note.className = 'none';
+    note.textContent = objMatch + ' object kind' + (objMatch === 1 ? '' : 's')
+                     + ' matching; the rest are hidden';
+    listBox.append(note);
+  }
+  if (!shown.length) {
+    const none = document.createElement('div');
+    none.className = 'none';
+    none.textContent = findBox.value.trim()
+      ? 'No place matches that.' : 'No kind is ticked.';
+    listBox.append(none);
+    return;
+  }
+  for (const p of shown.slice(0, LIST_CAP)) {
+    const id = idOf(p);
+    const row = document.createElement('div');
+    row.className = 'prow' + (found.has(id) ? ' done' : '');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = found.has(id);
+    box.title = 'Tick off a place you have been to';
+    box.addEventListener('click', e => e.stopPropagation());
+    box.addEventListener('change', () => {
+      if (box.checked) found.add(id); else found.delete(id);
+      row.classList.toggle('done', box.checked);
+      remember();
+    });
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = kindColour(p.kind);
+    const name = document.createElement('span');
+    name.className = 'nm';
+    name.textContent = namesOn ? titleOf(p) : 'place';
+    const at = document.createElement('span');
+    at.className = 'd';
+    at.textContent = p.cx + ', ' + p.cy;
+    row.append(box, dot, name, at);
+    row.addEventListener('click', () => flyTo(p));
+    listBox.append(row);
+  }
+  if (shown.length > LIST_CAP) {
+    const more = document.createElement('div');
+    more.className = 'none';
+    more.textContent = 'and ' + (shown.length - LIST_CAP)
+                     + ' more — narrow it with the search box';
+    listBox.append(more);
+  }
+}
+
+/* Put the camera over a place, far enough out to see all of it. */
+function flyTo(p) {
+  cam.tx = p.x;
+  cam.tz = p.z;
+  cam.ty = p.y * exag;
+  cam.dist = Math.max(90, Math.sqrt(p.cells) * 115);
+  cam.pitch = Math.min(Math.max(cam.pitch, 0.35), 0.9);
+}
+
+/* The labels, moved to wherever their place now projects to. Only the nearest
+   handful are put up: a world has hundreds of places and a screen has room for
+   a few dozen before they are a wall of text rather than a map. */
+const pool = [];
+function updateMarkers(vp, w, h) {
+  const near = [];
+  for (const p of shown) {
+    const y = p.y * exag;
+    const cw = vp[3] * p.x + vp[7] * y + vp[11] * p.z + vp[15];
+    if (cw <= 0.001) continue;                       /* behind the eye */
+    const nx = (vp[0] * p.x + vp[4] * y + vp[8] * p.z + vp[12]) / cw;
+    const ny = (vp[1] * p.x + vp[5] * y + vp[9] * p.z + vp[13]) / cw;
+    if (nx < -1.2 || nx > 1.2 || ny < -1.2 || ny > 1.2) continue;
+    /* Near counts, but so does size: a silo district four hundred metres off
+       is worth a label that a one-cell ruin at your feet is not. Scoring
+       distance against the square root of a place's footprint lets the big
+       landmarks outrank the scenery without ever silencing what is close. */
+    near.push({ p: p, x: (nx * 0.5 + 0.5) * w, y: (0.5 - ny * 0.5) * h,
+                w: namesOn ? titleOf(p).length * CHAR_W + LABEL_PAD : 15,
+                score: cw / (1 + 0.5 * Math.sqrt(p.cells)) });
+  }
+  /* Best first, and then only the ones that do not land on top of a label
+     already put up. Without this a cluster of ruins is a single unreadable
+     smear of overlapping text. */
+  near.sort((a, b) => a.score - b.score);
+  // A nameless pin is a fifteen-pixel square rather than a two-hundred-pixel
+  // label, so far more of them fit before the map stops being readable.
+  const cap = namesOn ? MAX_MARKERS : MAX_MARKERS * 3;
+  const keep = [];
+  for (const m of near) {
+    if (keep.length >= cap) break;
+    let clash = false;
+    for (const q of keep) {
+      if (Math.abs(q.x - m.x) < (q.w + m.w) * 0.5 + 8
+          && Math.abs(q.y - m.y) < LABEL_H) { clash = true; break; }
+    }
+    if (!clash) keep.push(m);
+  }
+  const take = keep.length;
+  while (pool.length < take) {
+    const el = document.createElement('div');
+    el.className = 'mk';
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const text = document.createElement('i');
+    el.append(dot, text);
+    el._dot = dot;
+    el._text = text;
+    markersBox.append(el);
+    pool.push(el);
+  }
+  for (let i = 0; i < pool.length; i++) {
+    const el = pool[i];
+    if (i >= take) { el.hidden = true; continue; }
+    const m = keep[i];
+    el.hidden = false;
+    el.style.left = m.x.toFixed(1) + 'px';
+    el.style.top = m.y.toFixed(1) + 'px';
+    el._dot.style.background = kindColour(m.p.kind);
+    el._text.textContent = titleOf(m.p);
+    el.classList.toggle('mute', !namesOn);
+    el.classList.toggle('done', found.has(idOf(m.p)));
+    el.title = 'cell ' + m.p.cx + ', ' + m.p.cy + ' — click to fly here';
+    el.onclick = () => flyTo(m.p);
+  }
+}
+
+/* All, none, or the other ones -- because ticking twenty-five kinds off one at
+   a time to look at one of them is not a legend, it is a chore. */
+function pick(what) {
+  for (const state of kinds.values()) {
+    state.on = what === 'all' ? true : what === 'none' ? false : !state.on;
+  }
+  for (const box of kindsBox.querySelectorAll('input')) {
+    box.checked = kinds.get(box.dataset.kind).on;
+  }
+  refresh();
+}
+
+const namesBtn = document.getElementById('names');
+function setNames(on) {
+  namesOn = on;
+  namesBtn.classList.toggle('on', on);
+  drawList();
+}
+
+if (PLACES && PLACES.length) {
+  document.getElementById('placesTab').hidden = false;
+  namesBtn.hidden = false;
+  buildKinds();
+  buildCats();
+  findBox.addEventListener('input', refresh);
+  for (const b of document.querySelectorAll('.pick button')) {
+    b.addEventListener('click', () => pick(b.dataset.pick));
+  }
+  namesBtn.addEventListener('click', () => setNames(!namesOn));
+  refresh();
+} else {
+  buildCats();
+}
+
+/* ------------------------------------------------------- performance mode */
+/* When the view cannot keep up, hand detail back until it can: the ground
+   first, because it is the most triangles for the least difference at a
+   distance, and how far the small objects carry with it. It is a multiplier on
+   what the user asked for rather than a change to the controls, so nothing the
+   user set is overwritten and everything returns when the view is still. */
+
+let ease = 1, easeClock = 0;
+function pace(dt, fps) {
+  if (!ui.autoperf.checked) { ease = 1; return; }
+  easeClock += dt;
+  if (easeClock < 0.4) return;
+  easeClock = 0;
+  /* Give ground quickly and take it back slowly, or a view sitting near the
+     threshold oscillates between crisp and coarse every half second. */
+  if (fps < 26) ease = Math.max(0.3, ease - 0.16);
+  else if (fps > 52) ease = Math.min(1, ease + 0.06);
 }
 
 /* ------------------------------------------------------------------- start */
@@ -1013,7 +1539,7 @@ async function start() {
     gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
 
-    const k = parseFloat(ui.detail.value);
+    const k = parseFloat(ui.detail.value) * ease;
     const gx = Math.max(1, Math.round(META.texW * k));
     const gy = Math.max(1, Math.round(META.texH * k));
     const verts = gx * gy * 6;
@@ -1030,8 +1556,11 @@ async function start() {
       gl.bindBuffer(gl.ARRAY_BUFFER, objInstances);
       common(pObj);
       gl.uniformMatrix4fv(pObj.u.uVP, false, vp);
-      gl.uniform1f(pObj.u.uReach, parseFloat(ui.reach.value));
-      for (const d of OBJ_DRAWS) {
+      /* Easing off pulls the small things in first; the big ones carry by
+         their own size and are what a place is recognised by. */
+      gl.uniform1f(pObj.u.uReach,
+                   parseFloat(ui.reach.value) * (0.35 + 0.65 * ease));
+      for (const d of visibleDraws) {
         gl.uniform3fv(pObj.u.uCentre, d.centre);
         atInstance(d.start);
         gl.drawElementsInstanced(gl.TRIANGLES, d.elems, gl.UNSIGNED_INT,
@@ -1068,8 +1597,12 @@ async function start() {
       gl.disable(gl.BLEND);
     }
 
+    updateMarkers(vp, stage.clientWidth, stage.clientHeight);
+    pace(dt, smooth);
+
     eyeOut.textContent = Math.round(eye[1]) + ' m';
-    fpsOut.textContent = Math.round(smooth) + ' fps';
+    fpsOut.textContent = Math.round(smooth) + ' fps'
+                       + (ease < 0.98 ? ' · eased' : '');
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -1138,13 +1671,15 @@ def _grey(array):
 
 
 def write_html(path, colour, height, meta, stats, title, subtitle,
-               prop=None, objects=None):
+               prop=None, objects=None, places=None):
     """colour: PIL Image. height: (h, w, 4) uint8 from terrain3d.
 
     ``prop`` is the separate prop-height field the shadow pass needs once the
-    props have left the ground, and ``objects`` is what objects3d.collect
-    returned: a mesh library, an instance buffer and a draw list.
+    props have left the ground, ``objects`` is what objects3d.collect returned
+    -- a mesh library, an instance buffer and a draw list -- and ``places`` is
+    poi.collect's landmarks, already in the frame the world is drawn in.
     """
+    from .assets import CATEGORY_RGB
     b64, mime = _colour(colour)
     liquid = {
         "shallow": [c / 255.0 for pair in palette.LIQUID_RGB for c in pair[0]],
@@ -1163,6 +1698,11 @@ def write_html(path, colour, height, meta, stats, title, subtitle,
             ("__OBJ_VERTS__", _buffer(o.get("verts"))),
             ("__OBJ_INDEX__", _buffer(o.get("index"))),
             ("__OBJ_INST__", _buffer(o.get("instances"))),
+            ("__PLACES__", json.dumps(places or [])),
+            ("__CAT_RGB__", json.dumps(CATEGORY_RGB)),
+            # What the ticked-off places are remembered under. The world's name
+            # rather than the file's, so moving or renaming the page keeps them.
+            ("__WORLD_KEY__", json.dumps(title)),
             ("__COLOUR_MIME__", mime),
             ("__COLOUR__", "'%s'" % b64),
             ("__PROP__", "null" if prop is None else "'%s'" % _grey(prop)),

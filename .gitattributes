@@ -1,0 +1,10 @@
+# The shell launcher must keep Unix line endings whatever machine commits it:
+# a .sh checked in with CRLF fails on Linux with "bad interpreter".
+*.sh text eol=lf
+
+# And the Windows launcher keeps CRLF for the same reason in reverse.
+*.bat text eol=crlf
+
+# Binary, so git never tries to fix the line endings inside them.
+*.png binary
+*.ico binary
