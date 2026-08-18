@@ -30,6 +30,28 @@ T_DOUBLE = 0x0B
 T_USERDATA = 0x64
 
 UD_UUID = 10001
+UD_VEC3 = 10003
+UD_QUAT = 10004
+UD_COLOR = 10005
+
+# How wide the rest of the game's userdata is. Everything below is a handle to
+# something the save keeps elsewhere -- a world, a body, a unit -- written as one
+# big-endian id, and the value only matters here in that skipping it by the wrong
+# number of bits desynchronises everything after it.
+#
+# The widths were measured rather than guessed: a blob decodes to exactly its own
+# length only if every value inside it was read at the right width, so trying
+# candidate widths against 4,824 real blobs from six saves pins each one down.
+# 10003 at twelve bytes reads back as world coordinates and 10004 at sixteen as
+# unit quaternions, which is the check that they are a vector and a rotation
+# rather than two runs of the right length.
+_UD_BYTES = {
+    UD_VEC3: 12,
+    UD_QUAT: 16,
+    UD_COLOR: 16,
+    10021: 4, 10023: 4, 10024: 4, 10025: 4, 10027: 4,
+    10028: 4, 10030: 4, 10036: 4, 10037: 4, 10039: 4,
+}
 
 MAGIC = b"LUA"
 
@@ -45,6 +67,33 @@ class Uuid(bytes):
 
     def is_nil(self):
         return self == b"\0" * 16
+
+
+class Vec3(tuple):
+    """A position or a size, as the game writes it: three big-endian floats."""
+
+    __slots__ = ()
+
+    @property
+    def x(self):
+        return self[0]
+
+    @property
+    def y(self):
+        return self[1]
+
+    @property
+    def z(self):
+        return self[2]
+
+    def __repr__(self):
+        return "(%.2f, %.2f, %.2f)" % self
+
+
+class Handle(int):
+    """An id standing in for something the save holds somewhere else."""
+
+    __slots__ = ()
 
 
 class UnknownTag(Exception):
@@ -80,6 +129,15 @@ def _value(r):
         kind = r.u32()
         if kind == UD_UUID:
             return Uuid(r.bytes(16)[::-1])
+        if kind == UD_VEC3:
+            return Vec3((r.f32(), r.f32(), r.f32()))
+        if kind == UD_QUAT or kind == UD_COLOR:
+            return tuple(r.f32() for _ in range(4))
+        n = _UD_BYTES.get(kind)
+        if n == 4:
+            return Handle(r.u32())
+        if n is not None:
+            return r.bytes(n)
         raise UnknownTag(0x64000000 | kind, at)
     if tag == T_STRING:
         n = r.u32()

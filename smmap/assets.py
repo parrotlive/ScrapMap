@@ -99,6 +99,13 @@ CATEGORY_RGB = {
     "rock":   (142, 140, 133),
     "wreck":  (146, 104, 72),
     "build":  (198, 194, 186),
+    # Nothing above these four is anybody's doing; nothing below them is the
+    # generator's. creations.KINDS is where they are named and coloured, and
+    # this is the same table so that one legend can hold both.
+    "made":   (216, 176, 96),
+    "driven": (208, 132, 72),
+    "built":  (176, 196, 216),
+    "welded": (150, 146, 138),
 }
 DEFAULT_CATEGORY = "build"
 

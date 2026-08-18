@@ -6,6 +6,9 @@ __pycache__/
 *_map.html
 *_map.png
 *_3d.html
+*_floor_*.html
+*_floor_*.png
+preview/
 
 # build_exe.py: the build environment, PyInstaller's scratch, and the 30 MB
 # executable itself. Ship that as a release asset, not in the history.

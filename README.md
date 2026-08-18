@@ -9,6 +9,54 @@ in your browser. Nothing to install, nothing to find, nothing to configure.
 
 ![](docs/gui.png)
 
+## New in 2.2 — the floors under it
+
+Scrap Mechanic has an underground now, and a world is no longer one map. The
+lift sits in the bar — **S 1 2 3 4 T 5 6 7**, the same buttons the lift in the
+game has — and every floor the world has been down to is a map of its own, made
+the same way the surface is: its own places, its own legend, its own search,
+names off until you ask for them, and its own 3D view.
+
+![](docs/underground3d.png)
+
+**A floor is a plan of the workings, not a picture of the rock.** Where a floor
+of the underground differs from the surface is the third axis: a cell is 64 m
+across and 256 m tall, and the same cell holds a tunnel at one height, a chamber
+at another and solid rock in between. So the map is drawn from the layings
+themselves — every cave, every pocket and every tunnel at the height it was dug
+— and whatever is highest at a point is what you see there, which is what
+looking down at a cave system gets you.
+
+Rock nobody has dug is not drawn at all. It is not a surface, and drawing it
+puts a lid over everything: flat, it is the dark the plan is drawn on, and in 3D
+it is cut away, so the chambers hang at their real depths with the tunnels
+running between them.
+
+The places are read off the tiles as they are on the surface, so a floor names
+its own: the mining hub, the underground stations, the scrapyard, the elevators,
+the cave chambers, and the gold, coralium and deeper deposits worth walking to.
+Floors the world has never been down to are in the lift and dead — the game only
+builds a floor when you take the lift to it, so the map has nothing to show for
+one you have not seen, and says so rather than making it up.
+
+**And what you left in it.** A map used to be the world as the generator made
+it, which is not the world you walked away from. Your car is in no tile, and
+neither is the base you welded together at the end of the road, or the wreck you
+dragged home. All of it is in the save, in tables the tool never used to open,
+and it is on the map now: every creation and every structure drawn block by
+block in the colours it was painted, along with the beds, the beacons, the quest
+markers, the lifts down and the spot you went down on.
+
+Yours is kept apart from the world's, because they are two different questions.
+The places legend has a heading for each, so ticking **Yours** on its own gives
+you what you built and nothing else; and in 3D your vehicles, your builds, your
+loose creations and what you welded down are four separate things that come and
+go one at a time, rather than sharing a switch with the generator's buildings.
+
+![](docs/creations.png)
+
+![](docs/yours.png)
+
 ## New in 2.1 — the places in it
 
 Both maps now know what is in your world and what it is called. A world lays
@@ -281,6 +329,7 @@ python -m smmap --3d --no-objects  # ...with the props left in the ground
 python -m smmap --px 64          # 64 px per 64 m cell (one metre per pixel)
 python -m smmap --no-structures  # bare terrain, still with its water
 python -m smmap --no-shade       # flat colours, no hillshading
+python -m smmap --no-underground # the surface only, without the floors under it
 python -m smmap --game "D:\...\Scrap Mechanic"
 ```
 
@@ -303,6 +352,29 @@ index (which is how the grid stores negative world coordinates), and a string
 realigns to a byte boundary before its text. `smlua.py` decodes it into the
 `uid` / `rotation` / `xOffset` / `yOffset` / `elevation` / `cliffLevel` grids for
 every cell in the world. Tile UUIDs are stored byte-reversed.
+
+**Which world is which.** A save holds more than one: the overworld, each
+warehouse, and each floor of the underground the player has taken the lift to,
+all numbered in the order they were first opened and all written by the same
+`sm.terrainData.save()`. `GenericData` carries a descriptor per world — a 32-bit
+word then three `u16`-length-prefixed strings: the script that generates it, the
+class name, and the JSON it was created with. So the overworld says it is the
+overworld and a floor says which floor it is, and nothing has to be guessed from
+an id (`savefile.py`).
+
+**The floors under it** are the same grid again with a third axis folded into
+it (`underground.py`). A floor is sixteen chunks of sixteen metres tall, four
+chunks to a cell, so a cell is a column rather than a square, and beside `uid`
+it carries `caves`, `pockets`, `spawners` and — per world — `tunnels`. The caves
+and pockets are packed one to an integer, laid out by `AddCaveCellData` and
+`AddPocketCellData` in the game's own `chunk_raster.lua`: a tile index, a height
+in chunks, a size, an offset into the tile and a rotation, with the cave's
+offsets counted in cells and the pocket's in chunks, which is why a pocket can
+sit a quarter of the way into a cell and a cave cannot. The tunnels are
+polylines in metres with the seam they were dug for on each. The cave walls
+themselves are not on disk in any form — the game builds them at run time by
+cutting voxel meshes out of the rock — so what is drawn is where the workings
+are, how deep they run and what is in them, all of which the save does hold.
 
 **The terrain** comes from the game's `.tile` files (`tiles.py`). Each holds six
 LZ4-compressed LOD levels; a level is `(S/2+1)²` float32 heights followed by `S²`
@@ -479,3 +551,10 @@ faces too, which is where the geometry comes from and why nothing new has to be
 read off disk to get it.
 
 Saves are opened read-only and immutable; the tool never writes to them.
+
+## Licence
+
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Use it,
+read it, change it and share it, including versions you have changed — as long
+as you credit where it came from, do not use it to make money, and pass on what
+you share under these same terms. Full text in [LICENSE](LICENSE).

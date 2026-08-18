@@ -34,6 +34,12 @@ LEVEL_MAX = (1 << (16 - KIND_BITS)) - 1        # 16383
 # Level 0 is not a low level, it is no liquid at all, so levels start at 1.
 LEVEL_SPAN = LEVEL_MAX - 1                     # 16382
 
+# "There is no ground here at all", which the overworld never says and the
+# underground says about most of every floor. A liquid level of nothing and a
+# liquid kind of three: there are three kinds of liquid, numbered from zero, so
+# the fourth number the two kind bits can hold is not otherwise reachable.
+VOID_MARK = 3
+
 # Cap for the two textures, in texels on the long side. The height cap is what
 # the shape of the land is worth: at this size a full 9 km world gets a height
 # every twelve metres, which is enough for a warehouse to still be a box rather
@@ -156,7 +162,33 @@ def prop_texture(r, target=None):
     return np.round(np.clip(top / PROP_CEILING, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
-def height_texture(r, target=None, props=True):
+def _spread(a, into, passes=3):
+    """Push the values at the edge of a region a little way into the empty part.
+
+    Only the texels immediately beside real ground are ever looked at -- the
+    viewer throws the rest away -- but they are looked at through a bilinear
+    filter, so if they hold the bottom of the world the ground slumps into the
+    hole over its last texel. Filling them with the ground beside them keeps the
+    surface flat right up to where it stops.
+    """
+    out = np.where(into, np.nan, a)
+    for _ in range(passes):
+        gaps = np.isnan(out)
+        if not gaps.any():
+            break
+        total = np.zeros_like(out)
+        count = np.zeros_like(out)
+        for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1)):
+            n = np.roll(out, shift, axis)
+            ok = ~np.isnan(n)
+            total += np.where(ok, n, 0.0)
+            count += ok
+        fill = np.divide(total, count, out=np.zeros_like(out), where=count > 0)
+        out = np.where(gaps & (count > 0), fill, out)
+    return np.where(np.isnan(out), a, out)
+
+
+def height_texture(r, target=None, props=True, void=None):
     """Pack the render's height fields into an (dh, dw, 4) uint8 array.
 
     Returns the array and the numbers needed to read it back: the world height
@@ -167,6 +199,12 @@ def height_texture(r, target=None, props=True):
     map does and what a viewer with no other way to show a building wants. Turn
     it off when the buildings are going in as real geometry, or the world gets
     each of them twice: once as a mesh and once as a lump under it.
+
+    ``void`` is a mask of where there is no ground to draw. The overworld has
+    none: every one of its cells is somewhere, even if that somewhere is the
+    sea. A floor of the underground is mostly rock that was never dug, and rock
+    is not a surface -- so it is marked, and the viewer cuts it out rather than
+    drawing a lid over the workings.
     """
     target = target or texel_target(r)
     ground = _ground(r)
@@ -186,9 +224,19 @@ def height_texture(r, target=None, props=True):
     surf = _reduce(water, f, dh, dw, "max")
     kinds = _reduce(kind.astype(np.float32), f, dh, dw, "max").astype(np.uint8)
 
+    # A texel is nothing only if none of the block behind it was anything, so
+    # the workings keep their outermost texel rather than losing it to rounding.
+    hole = None
+    if void is not None and void.any():
+        real = _reduce((~void).astype(np.float32), f, dh, dw, "max") > 0.5
+        if not real.all():
+            hole = ~real
+            solid = _spread(solid, hole)
+
     wet = surf > NO_LIQUID
-    lo = float(solid.min())
-    hi = float(solid.max())
+    live = solid if hole is None else solid[~hole]
+    lo = float(live.min())
+    hi = float(live.max())
     if wet.any():
         lo = min(lo, float(surf[wet].min()))
         hi = max(hi, float(surf[wet].max()))
@@ -206,6 +254,8 @@ def height_texture(r, target=None, props=True):
         t = np.clip((surf[wet] - lo) / span, 0.0, 1.0)
         level[wet] = 1 + np.round(t * LEVEL_SPAN).astype(np.uint32)
     packed = (level << KIND_BITS) | np.minimum(kinds, (1 << KIND_BITS) - 1)
+    if hole is not None:
+        packed[hole] = VOID_MARK
 
     out = np.empty((dh, dw, 4), dtype=np.uint8)
     out[:, :, 0] = (q >> 8).astype(np.uint8)
@@ -224,7 +274,13 @@ def height_texture(r, target=None, props=True):
         "spanY": dh * f * mpp,
         "texW": dw,
         "texH": dh,
-        "sea": _sea_level(water),
+        # The overworld sits in an ocean that carries on past its edge, and the
+        # page draws one so the world does not read as a slab on a table. A
+        # floor of the underground has no such thing: past the edge of the
+        # workings there is rock, and past the edge of the floor there is more
+        # rock. Saying there is no sea is what stops a sheet of water being laid
+        # under the whole of it.
+        "sea": None if hole is not None else _sea_level(water),
     }
 
 
@@ -247,9 +303,9 @@ def colour_texture(r, cap=COLOUR_TEXELS):
     return img
 
 
-def payload(r, cd, objects=False):
+def payload(r, cd, objects=False, void=None):
     """Everything the page needs about the world, ready to be JSON'd."""
-    hx, meta = height_texture(r, props=not objects)
+    hx, meta = height_texture(r, props=not objects, void=void)
     meta.update({
         "propCeiling": PROP_CEILING,
         "seed": str(cd.get("seed", "?")),

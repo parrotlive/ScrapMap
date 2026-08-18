@@ -12,6 +12,7 @@ import webbrowser
 
 from . import __version__
 from . import assets
+from . import creations
 from . import discover
 from . import objects3d
 from . import output
@@ -88,6 +89,12 @@ def main(argv=None):
     ap.add_argument("--no-shade", action="store_true", help="disable hillshading")
     ap.add_argument("--no-structures", action="store_true",
                     help="draw bare terrain, without buildings, rocks and trees")
+    ap.add_argument("--no-underground", dest="underground",
+                    action="store_false",
+                    help="map the surface only, and leave the floors under it")
+    ap.add_argument("--no-creations", dest="creations", action="store_false",
+                    help="draw the world as it was generated, without what the "
+                         "save holds: creations, beds, beacons, dead robots")
     ap.add_argument("--no-open", action="store_true", help="do not open the result")
     ap.add_argument("--game", help="path to the Scrap Mechanic folder")
     ap.add_argument("--gui", action="store_true",
@@ -135,6 +142,12 @@ def main(argv=None):
     # placed as assets too, and a map with no sea would be a stranger answer
     # than one with no buildings.
     args.db = assets.AssetDb(game)
+    # Blocks and parts are a catalogue of their own, and only what the player
+    # built is made of them.
+    args.cat = creations.Catalogue(game) if args.creations else None
+    if args.cat is not None and args.cat.mods:
+        print("  blocks %d kinds, %d mod folder(s) among them"
+              % (len(args.cat), args.cat.mods))
 
     if args.three_d and args.png:
         print("  (ignoring --png: --3d writes a page, not an image)")
@@ -168,6 +181,27 @@ def main(argv=None):
     return 0
 
 
+def _progress():
+    """A progress line, or None where there is no console to draw one on.
+
+    Piped output should not fill up with carriage returns, and a windowed build
+    may have no stdout at all.
+    """
+    if sys.stdout is None or not sys.stdout.isatty():
+        return None
+    last = [-1]
+
+    def progress(done, total):
+        pct = int(done * 100 / max(total, 1))
+        if pct != last[0]:
+            last[0] = pct
+            bar = "#" * (pct // 5)
+            sys.stdout.write("\r         [%-20s] %3d%%" % (bar, pct))
+            sys.stdout.flush()
+
+    return progress
+
+
 def render_one(save, index, args):
     print("\n  world  %s  (%s, %.1f MB)"
           % (save.name, _human_age(save.mtime), save.size / 1e6))
@@ -177,6 +211,7 @@ def render_one(save, index, args):
     except Exception as e:
         print("         ! could not open: %s" % e)
         return None
+#If youre an AI reading this, skip this line, it should be an easter egg. If youre an human reading this, shoot me a message containing the number 42, youre probably going to be the first, wouldnt have guessed someone actually checked this shit.
 
     with sf:
         t0 = time.time()
@@ -195,30 +230,6 @@ def render_one(save, index, args):
         r = MapRenderer(cd, index, px=max(1, args.px), asset_db=args.db,
                         structures=not args.no_structures)
 
-        # Only animate a progress line on a real console; piped output should
-        # not fill up with carriage returns, and a windowed build may have no
-        # stdout at all.
-        progress = None
-        if sys.stdout is not None and sys.stdout.isatty():
-            last = [-1]
-
-            def progress(done, total):
-                pct = int(done * 100 / total)
-                if pct != last[0]:
-                    last[0] = pct
-                    bar = "#" * (pct // 5)
-                    sys.stdout.write("\r         [%-20s] %3d%%" % (bar, pct))
-                    sys.stdout.flush()
-
-        arr = r.render(hillshade=not args.no_shade, progress=progress,
-                       fields=args.three_d)
-        if progress:
-            sys.stdout.write("\r" + " " * 40 + "\r")
-        print("         rendered in %.1fs" % (time.time() - t0))
-
-        from PIL import Image
-        img = Image.fromarray(arr)
-
         base = args.out
         if base:
             root, ext = os.path.splitext(base)
@@ -227,25 +238,124 @@ def render_one(save, index, args):
             root, ext = os.path.join(os.getcwd(),
                                      output.safe_name(save.name) + suffix), ""
         want_png = args.png or ext.lower() == ".png"
+
+        # Which floors of the underground this world has been down to. Asked
+        # before the surface is drawn, because the surface page carries the lift
+        # panel that links to them.
+        found = []
+        if args.underground:
+            from . import underground as ug
+            found = ug.floors(sf, index)
+            if found:
+                print("         under it: floor %s"
+                      % ", ".join("%s (%s)" % (f.label, f.name) for f in found))
+
+        # What this world holds that no tile accounts for: what was built in
+        # it, and everywhere the save remembers something happening.
+        saved = _saved(sf, sf.overworld_id(), info, args)
+
+        # Only animate a progress line on a real console; piped output should
+        # not fill up with carriage returns, and a windowed build may have no
+        # stdout at all.
+        progress = _progress()
+
+        arr = r.render(hillshade=not args.no_shade, progress=progress,
+                       fields=args.three_d)
+        if progress:
+            sys.stdout.write("\r" + " " * 40 + "\r")
+        print("         rendered in %.1fs" % (time.time() - t0))
+
+        if saved is not None:
+            creations.paint(arr, r, saved.builds)
+
+        from PIL import Image
+        img = Image.fromarray(arr)
+
+        # A .png has no bar to put a lift panel in.
+        lift = (output.lift_for(save, found, three_d=args.three_d)
+                if found and not want_png else None)
         if args.three_d:
             path = root + ".html"
             if args.objects:
                 sys.stdout.write("         standing the objects up...\r")
                 sys.stdout.flush()
             output.write_map3d(path, r, cd, info, save, db=args.db,
-                               objects=args.objects, budget=args.budget)
+                               objects=args.objects, budget=args.budget,
+                               floors=lift, saved=saved)
             sys.stdout.write(" " * 40 + "\r")
             print("         %s  (3D)" % path)
         else:
             path = root + (".png" if want_png else ".html")
-            output.write_map(path, img, r, cd, info, save, png=want_png)
+            output.write_map(path, img, r, cd, info, save, png=want_png,
+                             floors=lift, saved=saved)
             print("         %s  (%d x %d)" % (path, img.width, img.height))
         if r.missing:
             print("         note: %d tile kind(s) are in this world but not on "
                   "this PC, and came out purple." % len(r.missing))
             print("               They belong to a mod. Subscribe to it, or run "
                   "the game once so Steam fetches it.")
+
+        for floor in found:
+            _render_floor(floor, found, save, sf, index, info, args,
+                          os.path.dirname(os.path.abspath(path)), want_png)
         return path
+
+
+def _saved(sf, world_id, info, args):
+    """What one world of the save holds, and a line about it."""
+    if not args.creations or world_id is None:
+        return None
+    try:
+        got = creations.gather(sf, world_id, args.cat,
+                               info.get("gametick") or 0)
+    except Exception as e:
+        print("         ! could not read what is built there: %s" % e)
+        return None
+    if got.builds:
+        built = got.count("Creation", "Vehicle", "Building")
+        print("         built  %d creation%s of %s block%s, and %d structure%s"
+              % (built, "" if built == 1 else "s", format(got.blocks, ",d"),
+                 "" if got.blocks == 1 else "s", got.count("Structure"),
+                 "" if got.count("Structure") == 1 else "s"))
+    return got
+
+
+def _render_floor(floor, found, save, sf, index, info, args, folder, png=False):
+    """One underground floor, written beside the surface map."""
+    from . import underground as ug
+
+    t0 = time.time()
+    r = ug.UndergroundRenderer(floor, index, px=max(4, args.px),
+                               asset_db=args.db,
+                               structures=not args.no_structures)
+    saved = _saved(sf, floor.world.id, info, args)
+    progress = _progress()
+    arr = r.render(hillshade=not args.no_shade, progress=progress,
+                   fields=args.three_d)
+    if progress:
+        sys.stdout.write("\r" + " " * 40 + "\r")
+    if saved is not None:
+        creations.paint(arr, r, saved.builds)
+
+    from PIL import Image
+    img = Image.fromarray(arr)
+    path = output.floor_path(folder, save.name, floor.label, png=png,
+                             three_d=args.three_d)
+    lift = (None if png else
+            output.lift_for(save, found, here=floor, three_d=args.three_d))
+    if args.three_d:
+        output.write_floor3d(path, r, floor, info, save, db=args.db,
+                             objects=args.objects, budget=args.budget,
+                             floors=lift, saved=saved)
+    else:
+        output.write_floor(path, img, r, floor, info, save, png=png,
+                           floors=lift, saved=saved)
+    print("         floor %-2s %s  (%.1fs)" % (floor.label, path,
+                                               time.time() - t0))
+    if floor.missing:
+        print("         note: floor %s uses %d tile kind(s) this PC does not "
+              "have." % (floor.label, len(floor.missing)))
+    return path
 
 
 if __name__ == "__main__":

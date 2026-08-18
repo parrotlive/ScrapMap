@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.2
+
+**The floors under it.** The lift in the bar goes down through every floor the
+world has been to, and each one gets what the surface gets: its own places,
+legend, search, spoiler-free names and 3D view. A floor is a plan of the
+workings -- the chambers, the pockets and the tunnels between them, at the
+height they were dug -- and rock nobody has dug is not drawn at all. Floors the
+world has never been down to are dead in the lift, the way they are on the lift.
+
+**What the save holds.** A map used to be the world as the generator made it.
+It carries what is standing in it now as well: every creation and every
+structure, block by block, in the colours they were painted, along with the
+beds, the beacons, the quest markers and the lifts down. All of it comes out of
+the save's own bodies, so it is where the game put it.
+
+**Yours, kept apart from the world's.** The places legend has a heading for
+each, and the solid view draws your vehicles, your builds, your loose creations
+and what you welded down as four separate things that come and go one at a time.
+
+**The value reader is finished.** Positions, rotations, colours and the game's
+object handles were tags it did not know, so any part of a save holding one was
+skipped. Widths measured against 4,824 real blobs from six saves.
+
+Fixed:
+
+- Where you died went missing. The only record of it in a save is the bag you
+  dropped, and the game's respawn manager takes a bag off its list the moment
+  the cell holding it loads. The bag itself is read out of the world instead,
+  which is there for as long as the bag is.
+- A death of yours and a robot's read alike in the list. They are named apart
+  now: the hundred the game remembers are robots, and yours says so.
+
 ## 2.1
 
 **Places.** Both maps now name what is in your world — warehouses, the silo

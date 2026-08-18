@@ -59,6 +59,16 @@ PAGE = """<!doctype html>
        text-transform:uppercase; letter-spacing:.1em;
        border-left:1px solid var(--line); }
   #bar .read b { color:var(--fg); font-weight:400; }
+  /* The lift panel: one square per floor, the way the lift itself shows them,
+     and the floors this world has not been down to are there but dead. */
+  #bar .lift { display:flex; align-items:stretch;
+       border-right:1px solid var(--line); }
+  #bar .lift a, #bar .lift span { display:flex; align-items:center;
+       padding:0 9px; color:var(--dim); text-decoration:none;
+       letter-spacing:.1em; }
+  #bar .lift a:hover { color:var(--fg); background:var(--panel); }
+  #bar .lift .on { color:var(--red); background:var(--panel); }
+  #bar .lift .off { color:#3a3a37; }
   #show { position:absolute; top:0; left:0; z-index:5; background:var(--bg);
        border:0; border-right:1px solid var(--line);
        border-bottom:1px solid var(--line); color:var(--dim); font:inherit;
@@ -127,6 +137,14 @@ PAGE = """<!doctype html>
   .krow:hover { color:var(--fg); }
   .krow .n { margin-left:auto; color:#5c5c58;
        font-variant-numeric:tabular-nums; }
+  /* What the generator laid down and what the save itself holds are two
+     different questions, so the legend answers them one at a time. The heading
+     ticks its whole group, which is the point: a world has four thousand tiles
+     and one of your cars. */
+  .kgroup { color:#5c5c58; }
+  .kgroup + .krow { margin-top:0; }
+  .kgroup:not(:first-child) { margin-top:8px; padding-top:8px;
+       border-top:1px solid var(--line); }
   .prow { color:var(--dim); }
   .prow:hover { color:var(--fg); }
   .prow .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -171,7 +189,7 @@ PAGE = """<!doctype html>
   <button id="names" hidden
           title="Show what each place is called (N). Off, the map says where things are without telling you what they are.">Names</button>
   <button id="hide" title="Hide everything (H)">Hide</button>
-  <span class="gap"></span>
+  <span class="gap"></span>%(lift)s
   <span class="read">cell <b id="cell">-</b> world <b id="world">-</b>
     <b id="zoom">-</b></span>
 </div>
@@ -395,8 +413,12 @@ const LIST_CAP = 250;
    measuring anything the browser would have to lay out. */
 const CHAR_W = 6.7, LABEL_PAD = 27, LABEL_H = 19;
 /* The generator's filler variants outnumber the real landmarks several times
-   over, so the legend starts with them off. */
-const OFF_BY_DEFAULT = ['Random Site'];
+   over, so the legend starts with them off. So does everything the world
+   welded together itself: it is worth having on the map and it is not what
+   somebody opening the places list is looking for. The game keeps the last
+   hundred robots to die, which is a hundred pins around wherever you fight. */
+const OFF_BY_DEFAULT = ['Random Site', 'Rock Pocket', 'Structure',
+                        'Robot died here'];
 
 const markersBox = document.getElementById('markers');
 const kindsBox = document.getElementById('kinds');
@@ -436,32 +458,84 @@ function mapXY(p) {
   return [(p.cx - META.x0 + 0.5) * META.px, (META.y1 - p.cy + 0.5) * META.px];
 }
 
+/* The kinds the save itself holds -- what you built, where you slept, where you
+   died -- rather than what the generator laid down. Worked out when the page was
+   written, since only the writer knows which list a place came out of. */
+const YOURS = new Set(META.yours || []);
+
+function kindRow(kind, n) {
+  const state = { n: n, on: OFF_BY_DEFAULT.indexOf(kind) < 0 };
+  kinds.set(kind, state);
+  const row = document.createElement('label');
+  row.className = 'krow';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = state.on;
+  box.addEventListener('change', () => { state.on = box.checked; refresh(); });
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.style.background = kindColour(kind);
+  const name = document.createElement('span');
+  name.textContent = kind;
+  const count = document.createElement('span');
+  count.className = 'n';
+  count.textContent = n;
+  // So All/None/Invert and the group heading can find each kind's box.
+  box.dataset.kind = kind;
+  row.append(box, dot, name, count);
+  return row;
+}
+
+/* A heading that ticks everything under it. Without it, looking at nothing but
+   your own things means unticking twenty-odd kinds of tile by hand. */
+const groups = [];
+
+function groupRow(label, members) {
+  const row = document.createElement('label');
+  row.className = 'krow kgroup';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.addEventListener('change', () => {
+    for (const k of members) kinds.get(k).on = box.checked;
+    for (const b of kindsBox.querySelectorAll('input[data-kind]')) {
+      if (members.indexOf(b.dataset.kind) >= 0) b.checked = box.checked;
+    }
+    refresh();
+  });
+  const name = document.createElement('span');
+  name.textContent = label;
+  const count = document.createElement('span');
+  count.className = 'n';
+  count.textContent = members.reduce((s, k) => s + kinds.get(k).n, 0);
+  row.append(box, name, count);
+  groups.push({ box: box, members: members });
+  return row;
+}
+
+/* A heading is ticked while anything under it is, and half-ticked while only
+   some of it is, so it reads as a summary rather than as a fifth switch. */
+function syncGroups() {
+  for (const g of groups) {
+    const on = g.members.filter(k => kinds.get(k).on).length;
+    g.box.checked = on > 0;
+    g.box.indeterminate = on > 0 && on < g.members.length;
+  }
+}
+
 function buildKinds() {
   const tally = new Map();
   for (const p of PLACES) tally.set(p.kind, (tally.get(p.kind) || 0) + 1);
   const order = [...tally.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  for (const [kind, n] of order) {
-    const state = { n: n, on: OFF_BY_DEFAULT.indexOf(kind) < 0 };
-    kinds.set(kind, state);
-    const row = document.createElement('label');
-    row.className = 'krow';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = state.on;
-    box.addEventListener('change', () => { state.on = box.checked; refresh(); });
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.style.background = kindColour(kind);
-    const name = document.createElement('span');
-    name.textContent = kind;
-    const count = document.createElement('span');
-    count.className = 'n';
-    count.textContent = n;
-    // So All/None/Invert can find the box that belongs to each kind.
-    box.dataset.kind = kind;
-    row.append(box, dot, name, count);
-    kindsBox.append(row);
+  for (const mine of [false, true]) {
+    const group = order.filter(([k]) => YOURS.has(k) === mine);
+    if (!group.length) continue;
+    const rows = group.map(([kind, n]) => kindRow(kind, n));
+    if (YOURS.size) {
+      kindsBox.append(groupRow(mine ? 'Yours' : 'The world',
+                               group.map(([k]) => k)));
+    }
+    for (const row of rows) kindsBox.append(row);
   }
 }
 
@@ -471,7 +545,7 @@ function pick(what) {
   for (const state of kinds.values()) {
     state.on = what === 'all' ? true : what === 'none' ? false : !state.on;
   }
-  for (const box of kindsBox.querySelectorAll('input')) {
+  for (const box of kindsBox.querySelectorAll('input[data-kind]')) {
     box.checked = kinds.get(box.dataset.kind).on;
   }
   refresh();
@@ -495,6 +569,7 @@ function refresh() {
   });
   placeCount.textContent = shown.length === PLACES.length
     ? PLACES.length : shown.length + ' of ' + PLACES.length;
+  syncGroups();
   drawList();
   paint();
 }
@@ -532,7 +607,11 @@ function drawList() {
     name.textContent = namesOn ? titleOf(p) : 'place';
     const at = document.createElement('span');
     at.className = 'd';
-    at.textContent = p.cx + ', ' + p.cy;
+    /* Underground the height is the third coordinate and the one you actually
+       need -- a chamber at 176 m and one at 48 m are nowhere near each other --
+       so it goes where the cell reference does above ground. */
+    at.textContent = META.floors ? Math.round(p.h) + ' m'
+                                 : p.cx + ', ' + p.cy;
     row.append(box, dot, name, at);
     row.addEventListener('click', () => goTo(p));
     listBox.append(row);
@@ -689,11 +768,36 @@ def _encode(image):
     raise RuntimeError("could not encode the map image")
 
 
-def write_html(path, image, meta, stats, legend, title, subtitle, places=None):
+def lift(floors):
+    """The row of floor buttons, or nothing at all when there is one floor.
+
+    ``floors`` is [{"label", "name", "href", "here"}] with href empty for a
+    floor this world has never generated, which is every floor below the one
+    the player has got down to.
+    """
+    if not floors:
+        return ""
+    out = ['<span class="lift" title="Surface and the floors under it">']
+    for f in floors:
+        cls = "on" if f.get("here") else ("" if f.get("href") else "off")
+        label = html.escape(str(f["label"]))
+        tip = html.escape(f.get("name") or "")
+        if f.get("href") and not f.get("here"):
+            out.append('<a href="%s" title="%s">%s</a>'
+                       % (html.escape(f["href"], quote=True), tip, label))
+        else:
+            out.append('<span class="%s" title="%s">%s</span>' % (cls, tip, label))
+    out.append("</span>")
+    return "".join(out)
+
+
+def write_html(path, image, meta, stats, legend, title, subtitle, places=None,
+               floors=None):
     """image: PIL Image. meta: dict with w/h/px/x0/y1 in map pixels & cells.
 
     ``places`` is poi.collect's landmarks, which the page turns into pins on
-    the map and a legend you can pick the kinds apart with.
+    the map and a legend you can pick the kinds apart with. ``floors`` is the
+    lift panel, for a world that has an underground under it.
     """
     data_uri = _encode(image)
 
@@ -709,6 +813,7 @@ def write_html(path, image, meta, stats, legend, title, subtitle, places=None):
         "legend": _legend(legend),
         "places": json.dumps(places or []),
         "world_key": json.dumps(title),
+        "lift": lift(floors),
     }
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)

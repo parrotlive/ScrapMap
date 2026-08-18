@@ -77,6 +77,16 @@ PAGE = r"""<!doctype html>
        text-transform:uppercase; letter-spacing:.1em;
        border-left:1px solid var(--line); }
   #bar .read b { color:var(--fg); font-weight:400; }
+  /* The lift panel: one square per floor, the way the lift itself shows them,
+     and the floors this world has not been down to are there but dead. */
+  #bar .lift { display:flex; align-items:stretch;
+       border-right:1px solid var(--line); }
+  #bar .lift a, #bar .lift span { display:flex; align-items:center;
+       padding:0 9px; color:var(--dim); text-decoration:none;
+       letter-spacing:.1em; }
+  #bar .lift a:hover { color:var(--fg); background:var(--panel); }
+  #bar .lift .on { color:var(--red); background:var(--panel); }
+  #bar .lift .off { color:#3a3a37; }
   #show { position:absolute; top:0; left:0; z-index:5; background:var(--bg);
        border:0; border-right:1px solid var(--line);
        border-bottom:1px solid var(--line); color:var(--dim); font:inherit;
@@ -157,6 +167,13 @@ PAGE = r"""<!doctype html>
   .krow:hover { color:var(--fg); }
   .krow .n { margin-left:auto; color:#5c5c58;
        font-variant-numeric:tabular-nums; }
+  /* What the generator laid down and what the save itself holds are two
+     different questions, so the legend answers them one at a time. The heading
+     ticks its whole group, which is the point: a world has four thousand tiles
+     and one of your cars. */
+  .kgroup { color:#5c5c58; }
+  .kgroup:not(:first-child), .kmine { margin-top:8px; padding-top:8px;
+       border-top:1px solid var(--line); }
   .prow { color:var(--dim); }
   .prow:hover { color:var(--fg); }
   .prow .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -209,7 +226,7 @@ PAGE = r"""<!doctype html>
   <button id="names" hidden
           title="Show what each place is called (N). Off, the map says where things are without telling you what they are.">Names</button>
   <button id="hide" title="Hide everything (H)">Hide</button>
-  <span class="gap"></span>
+  <span class="gap"></span>__LIFT__
   <span class="read"><b id="eye">-</b> <b id="fps">-</b></span>
 </div>
 
@@ -402,6 +419,20 @@ vec2 liquidTexel(ivec2 p) {
   return vec2(uRange.x + (lvl - 1.0) * (1.0 / 16382.0) * uRange.y,
               packed - lvl * 4.0);
 }
+/* No water and a liquid kind that does not exist: the mark for a place with no
+   ground in it at all. Underground that is the rock nobody has dug, which has
+   no surface to draw and would otherwise be drawn as a lid over the workings.
+   The test is per texel and not filtered, so the edge of a chamber lands
+   exactly where the map says it does. */
+bool voidTexel(ivec2 p) {
+  p = clamp(p, ivec2(0), uTexSize - 1);
+  vec4 t = texelFetch(uHeight, p, 0);
+  float packed = floor(t.b * 255.0 + 0.5) * 256.0 + floor(t.a * 255.0 + 0.5);
+  return packed > 2.5 && packed < 3.5;
+}
+bool voidAt(vec2 uv) {
+  return voidTexel(ivec2(floor(uv * vec2(uTexSize))));
+}
 vec3 worldOf(vec2 uv, float h) {
   return vec3((uv.x - 0.5) * uSpan.x, h * uExag, (uv.y - 0.5) * uSpan.y);
 }
@@ -412,17 +443,15 @@ vec2 uvOf(vec3 w) { return w.xz / uSpan + 0.5; }
  * land fades into with distance, so both shaders want it. */
 const SKY = `
 uniform vec3 uSun;
+__SKY__
 vec3 skyColour(vec3 dir) {
   float up = dir.y;
-  vec3 top = vec3(0.216, 0.373, 0.612);
-  vec3 haze = vec3(0.639, 0.729, 0.827);
-  vec3 below = vec3(0.153, 0.180, 0.216);
-  vec3 c = up >= 0.0 ? mix(haze, top, pow(clamp(up, 0.0, 1.0), 0.55))
-                     : mix(haze, below, clamp(-up * 3.0, 0.0, 1.0));
+  vec3 c = up >= 0.0 ? mix(SKY_HAZE, SKY_TOP, pow(clamp(up, 0.0, 1.0), 0.55))
+                     : mix(SKY_HAZE, SKY_BELOW, clamp(-up * 3.0, 0.0, 1.0));
   float d = max(dot(dir, uSun), 0.0);
   /* A wide warm bloom with a small disc in it, so the sun is somewhere you can
      see rather than a number in a panel. */
-  c += vec3(1.0, 0.85, 0.6) * (pow(d, 8.0) * 0.16 + pow(d, 900.0) * 2.4);
+  c += vec3(1.0, 0.85, 0.6) * (pow(d, 8.0) * 0.16 + pow(d, 900.0) * 2.4) * SUN_DISC;
   return c;
 }
 `;
@@ -542,6 +571,8 @@ in vec3 vWorld;
 out vec4 frag;
 
 void main() {
+  /* Rock nobody dug is not a surface; there is simply nothing here. */
+  if (voidAt(vUv)) discard;
   /* The normal comes from the height field rather than from the mesh, so the
      lighting keeps its detail however coarsely the land is tessellated. */
   vec2 e = 1.0 / vec2(uTexSize);
@@ -1029,10 +1060,18 @@ const CHAR_W = 6.7, LABEL_PAD = 27, LABEL_H = 19;
 const LIST_CAP = 250;            /* rows before the list asks you to search */
 /* The generator's filler variants outnumber the real landmarks several times
    over, so the legend starts with them off and the world reads before you have
-   touched anything. */
-const OFF_BY_DEFAULT = ['Random Site'];
+   touched anything. The game keeps the last hundred robots to die, which is a
+   hundred pins around wherever you fight, so those start off too. */
+const OFF_BY_DEFAULT = ['Random Site', 'Rock Pocket', 'Structure',
+                        'Robot died here'];
+/* The first six are the generator's; the last four are yours, and they are
+   listed apart so that hiding the world's buildings does not hide your house
+   with them. creations.KINDS is where they are decided. */
 const CAT_LABEL = { build: 'Buildings', road: 'Roads', plant: 'Plants',
-                    rock: 'Rocks', wreck: 'Wrecks', ground: 'Ground' };
+                    rock: 'Rocks', wreck: 'Wrecks', ground: 'Ground',
+                    made: 'Creations', driven: 'Vehicles',
+                    built: 'Your builds', welded: 'Welded down' };
+const CAT_YOURS = ['made', 'driven', 'built', 'welded'];
 
 const markersBox = document.getElementById('markers');
 const kindsBox = document.getElementById('kinds');
@@ -1092,21 +1131,63 @@ function tickRow(colour, label, count, on, onChange) {
   return row;
 }
 
+/* The kinds the save itself holds -- what you built, where you slept, where you
+   died -- rather than what the generator laid down. Worked out when the page was
+   written, since only the writer knows which list a place came out of. */
+const YOURS = new Set(META.yours || []);
+const groups = [];
+
+/* A heading that ticks everything under it. Without it, looking at nothing but
+   your own things means unticking twenty-odd kinds of tile by hand. */
+function groupRow(label, members) {
+  const row = tickRow(null, label, members.reduce(
+    (s, k) => s + kinds.get(k).n, 0), false, on => {
+    for (const k of members) kinds.get(k).on = on;
+    for (const b of kindsBox.querySelectorAll('input[data-kind]')) {
+      if (members.indexOf(b.dataset.kind) >= 0) b.checked = on;
+    }
+    refresh();
+  });
+  row.className = 'krow kgroup';
+  row.querySelector('.dot').remove();
+  groups.push({ box: row.querySelector('input'), members: members });
+  return row;
+}
+
+/* A heading is ticked while anything under it is, and half-ticked while only
+   some of it is, so it reads as a summary rather than as a fifth switch. */
+function syncGroups() {
+  for (const g of groups) {
+    const on = g.members.filter(k => kinds.get(k).on).length;
+    g.box.checked = on > 0;
+    g.box.indeterminate = on > 0 && on < g.members.length;
+  }
+}
+
 function buildKinds() {
   const tally = new Map();
   for (const p of PLACES) tally.set(p.kind, (tally.get(p.kind) || 0) + 1);
   const order = [...tally.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  for (const [kind, n] of order) {
-    const state = { n: n, on: OFF_BY_DEFAULT.indexOf(kind) < 0 };
-    kinds.set(kind, state);
-    const row = tickRow(kindColour(kind), kind, n, state.on, on => {
-      state.on = on;
-      refresh();
+  for (const mine of [false, true]) {
+    const group = order.filter(([k]) => YOURS.has(k) === mine);
+    if (!group.length) continue;
+    const rows = group.map(([kind, n]) => {
+      const state = { n: n, on: OFF_BY_DEFAULT.indexOf(kind) < 0 };
+      kinds.set(kind, state);
+      const row = tickRow(kindColour(kind), kind, n, state.on, on => {
+        state.on = on;
+        refresh();
+      });
+      // So All/None/Invert and the group heading can find each kind's box.
+      row.querySelector('input').dataset.kind = kind;
+      return row;
     });
-    // So All/None/Invert can find the box that belongs to each kind.
-    row.querySelector('input').dataset.kind = kind;
-    kindsBox.append(row);
+    if (YOURS.size) {
+      kindsBox.append(groupRow(mine ? 'Yours' : 'The world',
+                               group.map(([k]) => k)));
+    }
+    for (const row of rows) kindsBox.append(row);
   }
 }
 
@@ -1115,15 +1196,24 @@ function buildCats() {
   const tally = new Map();
   for (const d of OBJ_DRAWS) tally.set(d.cat, (tally.get(d.cat) || 0) + d.count);
   const order = [...tally.entries()].sort((a, b) => b[1] - a[1]);
-  for (const [cat, n] of order) {
-    const state = { n: n, on: true };
-    cats.set(cat, state);
-    const rgb = CAT_RGB[cat] || [140, 140, 140];
-    catsBox.append(tickRow('rgb(' + rgb.join(',') + ')',
-                           CAT_LABEL[cat] || cat, compact(n), true, on => {
-      state.on = on;
-      refresh();
-    }));
+  /* The world's art first, then what the save holds -- a block of yours is a
+     draw of its own, so it is put out and taken away on its own. */
+  for (const mine of [false, true]) {
+    let first = true;
+    for (const [cat, n] of order) {
+      if ((CAT_YOURS.indexOf(cat) >= 0) !== mine) continue;
+      const state = { n: n, on: true };
+      cats.set(cat, state);
+      const rgb = CAT_RGB[cat] || [140, 140, 140];
+      const row = tickRow('rgb(' + rgb.join(',') + ')',
+                          CAT_LABEL[cat] || cat, compact(n), true, on => {
+        state.on = on;
+        refresh();
+      });
+      if (mine && first && catsBox.children.length) row.classList.add('kmine');
+      first = false;
+      catsBox.append(row);
+    }
   }
   catsBox.hidden = false;
 }
@@ -1152,6 +1242,7 @@ function refresh() {
 
   placeCount.textContent = shown.length === PLACES.length
     ? PLACES.length : shown.length + ' of ' + PLACES.length;
+  syncGroups();
   drawList();
 }
 
@@ -1290,7 +1381,7 @@ function pick(what) {
   for (const state of kinds.values()) {
     state.on = what === 'all' ? true : what === 'none' ? false : !state.on;
   }
-  for (const box of kindsBox.querySelectorAll('input')) {
+  for (const box of kindsBox.querySelectorAll('input[data-kind]')) {
     box.checked = kinds.get(box.dataset.kind).on;
   }
   refresh();
@@ -1670,16 +1761,40 @@ def _grey(array):
     return _b64(buf.getvalue())
 
 
+# What the world is seen against. Daylight for a world with a sky over it; the
+# underground passes its own, because a floor of it is a long way from one and
+# the workings should hang in the dark the way they do on the flat map.
+DAYLIGHT_SKY = {"top": (0.216, 0.373, 0.612),
+                "haze": (0.639, 0.729, 0.827),
+                "below": (0.153, 0.180, 0.216),
+                "sun": 1.0}
+CAVERN_SKY = {"top": (0.020, 0.019, 0.018),
+              "haze": (0.075, 0.068, 0.060),
+              "below": (0.012, 0.012, 0.013),
+              "sun": 0.0}
+
+
+def _sky(sky):
+    s = dict(DAYLIGHT_SKY, **(sky or {}))
+    return ("const vec3 SKY_TOP = vec3(%.4f, %.4f, %.4f);\n"
+            "const vec3 SKY_HAZE = vec3(%.4f, %.4f, %.4f);\n"
+            "const vec3 SKY_BELOW = vec3(%.4f, %.4f, %.4f);\n"
+            "const float SUN_DISC = %.3f;"
+            % (s["top"] + s["haze"] + s["below"] + (s["sun"],)))
+
+
 def write_html(path, colour, height, meta, stats, title, subtitle,
-               prop=None, objects=None, places=None):
+               prop=None, objects=None, places=None, floors=None, sky=None):
     """colour: PIL Image. height: (h, w, 4) uint8 from terrain3d.
 
     ``prop`` is the separate prop-height field the shadow pass needs once the
     props have left the ground, ``objects`` is what objects3d.collect returned
-    -- a mesh library, an instance buffer and a draw list -- and ``places`` is
-    poi.collect's landmarks, already in the frame the world is drawn in.
+    -- a mesh library, an instance buffer and a draw list -- ``places`` is
+    poi.collect's landmarks, already in the frame the world is drawn in, and
+    ``floors`` is the lift panel for a world with an underground under it.
     """
     from .assets import CATEGORY_RGB
+    from .viewer import lift
     b64, mime = _colour(colour)
     liquid = {
         "shallow": [c / 255.0 for pair in palette.LIQUID_RGB for c in pair[0]],
@@ -1699,6 +1814,8 @@ def write_html(path, colour, height, meta, stats, title, subtitle,
             ("__OBJ_INDEX__", _buffer(o.get("index"))),
             ("__OBJ_INST__", _buffer(o.get("instances"))),
             ("__PLACES__", json.dumps(places or [])),
+            ("__LIFT__", lift(floors)),
+            ("__SKY__", _sky(sky)),
             ("__CAT_RGB__", json.dumps(CATEGORY_RGB)),
             # What the ticked-off places are remembered under. The world's name
             # rather than the file's, so moving or renaming the page keeps them.

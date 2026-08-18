@@ -20,7 +20,7 @@ each mesh goes up once and each instance is a transform and a colour.
 
 import numpy as np
 
-from .assets import CATEGORY_RGB
+from .assets import CATEGORY_RGB, DEFAULT_CATEGORY
 
 CELL = 64.0
 
@@ -41,8 +41,24 @@ STRIDE = 36
 DEFAULT_BUDGET = 800_000
 
 # A prop this small is scenery in the literal sense -- a pebble, a tuft -- and
-# a whole world of them costs more than it shows.
+# a whole world of them costs more than it shows. It is deliberately not applied
+# to what a player built: a block is a quarter of a metre and every one of them
+# was put there on purpose.
 MIN_RADIUS = 0.35
+
+# How many blocks and parts of the save's own bodies to stand up. They are
+# cheaper than props -- one shared cube, one instance each -- but a well-played
+# world holds hundreds of thousands, and whole creations are dropped rather than
+# parts of one when there are more than this.
+BUILD_BUDGET = 400_000
+
+# The mesh every block is drawn as: the unit cube, corner at the origin, so a
+# shape's matrix is its size and its position is where its low corner sits.
+_CUBE = (np.array([(x, y, z) for x in (0.0, 1.0) for y in (0.0, 1.0)
+                   for z in (0.0, 1.0)], np.float32),
+         np.array([(0, 1, 3), (0, 3, 2), (4, 7, 5), (4, 6, 7),
+                   (0, 5, 1), (0, 4, 5), (2, 3, 7), (2, 7, 6),
+                   (0, 2, 6), (0, 6, 4), (1, 5, 7), (1, 7, 3)], np.int32))
 
 # How much of the category colour to mix into an object's own paint. The flat
 # map leans on the category to keep a town legible at a kilometre; a solid
@@ -50,22 +66,48 @@ MIN_RADIUS = 0.35
 _CATEGORY_MIX = 0.15
 
 
-def _place_xy(u, v, step):
-    """Tile-local metres inside a 64 m cell -> east and north inside the cell.
+def _place_xy(u, v, step, w=CELL, h=CELL):
+    """Tile-local metres inside a piece of tile -> east and north inside it.
 
     Derived from render.py's _orient by following one sample through it: rows
     are flipped there because tile rows run south to north, and the rotation is
     then applied as whole quarter turns. Written out per case rather than as a
     matrix because these are exact and a rotation by 90 degrees in floating
     point is not.
+
+    ``w`` and ``h`` are how big the piece is, which for the overworld is always
+    one 64 m cell. Underground a pocket can be any number of 16 m chunks
+    across, and a quarter turn then swaps the two.
     """
     if step == 1:
-        return CELL - v, u
+        return h - v, u
     if step == 2:
-        return CELL - u, CELL - v
+        return w - u, h - v
     if step == 3:
-        return v, CELL - u
+        return v, w - u
     return u, v
+
+
+class Laid(object):
+    """A tile laid down somewhere that is not one whole cell of a flat grid.
+
+    The overworld only ever puts a tile in a cell, so a cell index and a
+    rotation say everything. Underground a laying can be a few chunks of a tile
+    dropped a quarter of the way into a cell and lifted eighty metres off the
+    floor, so it carries its own rectangle, its own place and its own height.
+
+    Everything is in metres: ``sx``/``sy`` and ``w``/``h`` cut the piece out of
+    the tile, ``east``/``north`` are where its south-west corner lands in the
+    world, and ``lift`` is how far the whole thing stands off the datum.
+    """
+
+    __slots__ = ("sx", "sy", "w", "h", "east", "north", "lift", "step")
+
+    def __init__(self, sx, sy, w, h, east, north, lift, step):
+        self.sx, self.sy, self.w, self.h = sx, sy, w, h
+        self.east, self.north = east, north
+        self.lift = lift
+        self.step = step
 
 
 # The same quarter turn as a matrix, to compose with each prop's own rotation.
@@ -94,6 +136,7 @@ class MeshLibrary(object):
         self.spans = []          # index count per mesh; starts follow on packing
         self.bounds = []         # (centre xyz, radius) per mesh, local frame
         self.uuids = []          # which asset each mesh came from, in mesh order
+        self.named = {}          # mesh index -> (name, category) for non-assets
         self._verts = 0
         self._count = 0
 
@@ -109,7 +152,18 @@ class MeshLibrary(object):
         if m is None:
             self.ids[uuid] = -1
             return -1
-        v, t = m
+        return self._add(uuid, m[0], m[1])
+
+    def shape_of(self, key, verts, tris, name, cat):
+        """Index of a mesh that is not an asset, such as a block's cube."""
+        hit = self.ids.get(key)
+        if hit is not None:
+            return hit
+        out = self._add(key, verts, tris)
+        self.named[out] = (name, cat)
+        return out
+
+    def _add(self, key, v, t):
         # Indices are rebased as the mesh goes in, so the whole library shares
         # one vertex buffer and one index buffer and binds exactly once.
         self.verts.append(v)
@@ -119,10 +173,10 @@ class MeshLibrary(object):
         centre = (lo + hi) * 0.5
         self.bounds.append((centre, float(np.linalg.norm(hi - centre))))
         self.spans.append(len(t) * 3)
-        self.uuids.append(uuid)
+        self.uuids.append(key)
         out = self._count
         self._count += 1
-        self.ids[uuid] = out
+        self.ids[key] = out
         return out
 
     def pack(self):
@@ -145,7 +199,7 @@ class MeshLibrary(object):
 class _TileProps(object):
     """One tile's props, prepared once however many cells the tile fills."""
 
-    __slots__ = ("pos", "mat", "mesh", "rgb", "radius", "cells")
+    __slots__ = ("pos", "mat", "mesh", "rgb", "radius", "cells", "_box")
 
     def __init__(self, pos, mat, mesh, rgb, radius, cells):
         self.pos = pos
@@ -154,6 +208,20 @@ class _TileProps(object):
         self.rgb = rgb
         self.radius = radius
         self.cells = cells       # (ox, oy) -> indices into the arrays above
+        self._box = None
+
+    def inside(self, sx, sy, w, h):
+        """Indices of the props standing in a rectangle of the tile.
+
+        Only the underground asks: a cell of the overworld is a whole cell of a
+        tile and the bucketing above already answers that. The mask is built the
+        first time it is wanted, so a world that never uses it never pays.
+        """
+        if self._box is None:
+            self._box = (self.pos[:, 0], self.pos[:, 1])
+        x, y = self._box
+        return np.flatnonzero((x >= sx) & (x < sx + w)
+                              & (y >= sy) & (y < sy + h))
 
 
 def _prepare(tile, loader, db, lib):
@@ -203,12 +271,17 @@ def _prepare(tile, loader, db, lib):
     return _TileProps(pos, mat, mesh, rgb, radius, cells)
 
 
-def collect(r, db, loader, span, budget=DEFAULT_BUDGET, progress=None):
+def collect(r, db, loader, span, budget=DEFAULT_BUDGET, progress=None,
+            builds=None):
     """Every placed object in the world, in the viewer's own coordinates.
 
     ``r`` must have been rendered with fields=True, which is what leaves behind
     the cell-to-tile map and the elevation grid this walks. ``span`` is what the
     terrain mesh covers, from terrain3d.extent.
+
+    ``builds`` are the bodies the save itself holds -- what the player built and
+    what the world welded together -- which are placed by their own coordinates
+    rather than by any tile, and so go in after the rest.
     """
     if not r.placements:
         return None
@@ -232,26 +305,41 @@ def collect(r, db, loader, span, budget=DEFAULT_BUDGET, progress=None):
             if progress:
                 progress(done, total)
             continue
-        for i, j, ox, oy, step in cells:
-            idx = tp.cells.get((ox, oy))
-            if idx is None:
-                continue
-            seen += len(idx)
-            p = tp.pos[idx]
-            u = p[:, 0] - ox * CELL
-            v = p[:, 1] - oy * CELL
-            e, n = _place_xy(u, v, step)
+        for cell in cells:
+            if isinstance(cell, Laid):
+                idx = tp.inside(cell.sx, cell.sy, cell.w, cell.h)
+                if not len(idx):
+                    continue
+                seen += len(idx)
+                p = tp.pos[idx]
+                e, n = _place_xy(p[:, 0] - cell.sx, p[:, 1] - cell.sy,
+                                 cell.step, cell.w, cell.h)
+                base = cell.lift
+                east = cell.east + e
+                north = cell.north + n
+                step = cell.step
+            else:
+                i, j, ox, oy, step = cell
+                idx = tp.cells.get((ox, oy))
+                if idx is None:
+                    continue
+                seen += len(idx)
+                p = tp.pos[idx]
+                u = p[:, 0] - ox * CELL
+                v = p[:, 1] - oy * CELL
+                e, n = _place_xy(u, v, step)
 
-            # The save's corner elevations lift the whole cell; the prop's own
-            # z is already in the tile's frame, the same one the ground is in.
-            fx, fy = e / CELL, n / CELL
-            base = (elev[j, i] * (1 - fx) * (1 - fy)
-                    + elev[j, i + 1] * fx * (1 - fy)
-                    + elev[j + 1, i] * (1 - fx) * fy
-                    + elev[j + 1, i + 1] * fx * fy)
+                # The save's corner elevations lift the whole cell; the prop's
+                # own z is already in the tile's frame, the same one the ground
+                # is in.
+                fx, fy = e / CELL, n / CELL
+                base = (elev[j, i] * (1 - fx) * (1 - fy)
+                        + elev[j, i + 1] * fx * (1 - fy)
+                        + elev[j + 1, i] * (1 - fx) * fy
+                        + elev[j + 1, i + 1] * fx * fy)
 
-            east = (r.x0 + i) * CELL + e
-            north = (r.y0 + j) * CELL + n
+                east = (r.x0 + i) * CELL + e
+                north = (r.y0 + j) * CELL + n
             # East stays east, up stays up, and north becomes negative south,
             # which is the frame the terrain mesh is laid out in.
             pos_out.append(np.stack([east - left, p[:, 2] + base, top - north],
@@ -282,7 +370,40 @@ def collect(r, db, loader, span, budget=DEFAULT_BUDGET, progress=None):
         pick = np.argpartition(-rad, budget)[:budget]
         pos, mat, rgb, mesh, rad = (a[pick] for a in (pos, mat, rgb, mesh, rad))
 
+    made = _bodies(lib, builds, left, top) if builds else None
+    if made is not None:
+        seen += len(made[0])
+        pos, mat, rgb, mesh, rad = (np.concatenate([a, b]) for a, b in
+                                    zip((pos, mat, rgb, mesh, rad), made))
+
     return _pack(lib, pos, mat, rgb, mesh, rad, seen)
+
+
+def _bodies(lib, builds, left, top):
+    """The save's own bodies as instances of one cube, block by block.
+
+    One cube, but a mesh per kind of creation: the page draws a mesh at a time
+    and names it in the legend, so a vehicle sharing a mesh with a warehouse is
+    a vehicle that cannot be looked at on its own. They are the same twelve
+    triangles either way -- what differs is which draw they land in.
+    """
+    from . import creations
+
+    got = creations.boxes(builds, cap=BUILD_BUDGET)
+    if got is None:
+        return None
+    pos, mat, rgb, rad, kind = got
+    mesh = np.empty(len(pos), np.int32)
+    for name in np.unique(kind):
+        cat = creations.KINDS.get(name, (DEFAULT_CATEGORY,))[0]
+        mesh[kind == name] = lib.shape_of("<block:%s>" % name, _CUBE[0],
+                                          _CUBE[1], str(name), cat)
+    # East stays east, up stays up, north becomes negative south: the same
+    # change of frame every prop above goes through.
+    out = np.stack([pos[:, 0] - left, pos[:, 2], top - pos[:, 1]], axis=1)
+    return (out.astype(np.float32),
+            np.einsum("ij,njk->nik", _TO_VIEWER, mat).astype(np.float32),
+            rgb, mesh, rad.astype(np.float32))
 
 
 def _pack(lib, pos, mat, rgb, mesh, rad, seen):
@@ -316,8 +437,10 @@ def _pack(lib, pos, mat, rgb, mesh, rad, seen):
               "index": int(spans[m][0]), "elems": int(spans[m][1]),
               "centre": [round(float(x), 4) for x in centres[m]],
               "radius": round(float(radii[m]), 4),
-              "name": db.name(lib.uuids[m]) or "unnamed",
-              "cat": db.category(lib.uuids[m])}
+              "name": lib.named.get(m, (None,))[0]
+                      or db.name(lib.uuids[m]) or "unnamed",
+              "cat": lib.named[m][1] if m in lib.named
+                     else db.category(lib.uuids[m])}
              for m, (s, c) in enumerate(zip(starts.tolist(), counts.tolist()))
              if c]
     return {

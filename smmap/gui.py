@@ -132,6 +132,20 @@ class App(object):
                         variable=self.objects).pack(side="left", padx=(16, 0))
 
         row = ttk.Frame(opts)
+        row.pack(fill="x", padx=10, pady=2)
+        self.underground = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row, text="The floors under it too, where the world has "
+                                  "been down there", variable=self.underground
+                        ).pack(side="left")
+
+        row = ttk.Frame(opts)
+        row.pack(fill="x", padx=10, pady=2)
+        self.creations = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row, text="What is built in it: creations, beds, "
+                                  "beacons, where robots died",
+                        variable=self.creations).pack(side="left")
+
+        row = ttk.Frame(opts)
         row.pack(fill="x", padx=10, pady=(4, 10))
         ttk.Label(row, text="Save in").pack(side="left")
         self.folder = tk.StringVar(value=output.default_folder())
@@ -235,7 +249,8 @@ class App(object):
                     structures=self.structures.get(),
                     shade=self.shade.get(), png=self.png.get(),
                     three_d=self.three_d.get(), objects=self.objects.get(),
-                    folder=folder)
+                    underground=self.underground.get(),
+                    creations=self.creations.get(), folder=folder)
         self.worker = threading.Thread(target=self._work, args=(saves, opts),
                                        daemon=True)
         self.worker.start()
@@ -265,6 +280,11 @@ class App(object):
                 self._post("say", "reading the asset catalogue")
                 db = assets.AssetDb(game)
                 self._cache["db"] = db
+            cat = self._cache.get("cat")
+            if cat is None and opts["creations"]:
+                from . import creations
+                self._post("say", "reading the blocks and parts")
+                cat = self._cache["cat"] = creations.Catalogue(game)
 
             done = []
             for n, save in enumerate(saves):
@@ -278,6 +298,14 @@ class App(object):
                         self._post("skip", (save.name, "no overworld terrain"))
                         continue
                     info = sf.game_info()
+                    # Asked before the surface is drawn: its page carries the
+                    # lift panel that links to the floors under it.
+                    found = []
+                    if opts["underground"]:
+                        from . import underground as ug
+                        self._post("say", "looking under %s" % save.name)
+                        found = ug.floors(sf, index)
+                    saved = self._saved(sf, sf.overworld_id(), info, cat, opts)
                     r = MapRenderer(cd, index, px=opts["px"], asset_db=db,
                                     structures=opts["structures"])
 
@@ -289,10 +317,17 @@ class App(object):
 
                     arr = r.render(hillshade=opts["shade"], progress=step,
                                    fields=opts["three_d"])
+                    if saved is not None:
+                        from . import creations
+                        creations.paint(arr, r, saved.builds)
                     self._post("progress", (base + span * 0.92,
                                             "writing the file"))
                     path = output.default_path(opts["folder"], save.name,
                                                opts["png"], opts["three_d"])
+                    # A plain image has no bar to put a lift panel in.
+                    lift = (output.lift_for(save, found,
+                                            three_d=opts["three_d"])
+                            if found and not opts["png"] else None)
                     if opts["three_d"]:
                         def stand(a, b, base=base, span=span, name=save.name):
                             self._check()
@@ -303,18 +338,67 @@ class App(object):
 
                         output.write_map3d(path, r, cd, info, save, db=db,
                                            objects=opts["objects"],
-                                           progress=stand)
+                                           progress=stand, floors=lift,
+                                           saved=saved)
                     else:
                         img = Image.fromarray(arr)
                         output.write_map(path, img, r, cd, info, save,
-                                         png=opts["png"])
+                                         png=opts["png"], floors=lift,
+                                         saved=saved)
                     done.append(path)
                     self._post("wrote", (save.name, path, len(r.missing)))
+                    for floor in found:
+                        self._check()
+                        self._post("say", "drawing floor %s of %s"
+                                   % (floor.label, save.name))
+                        done.append(self._floor(floor, found, save, sf, index,
+                                                db, cat, info, opts))
             self._post("finished", done)
         except Cancelled:
             self._post("cancelled", None)
         except Exception:
             self._post("failed", traceback.format_exc())
+
+    def _saved(self, sf, world_id, info, cat, opts):
+        """What one world of the save holds, or None if it was not asked for."""
+        if not opts["creations"] or world_id is None:
+            return None
+        from . import creations
+        try:
+            return creations.gather(sf, world_id, cat,
+                                    info.get("gametick") or 0)
+        except Exception:
+            # A world whose bodies will not read is still a world worth
+            # drawing; the terrain is the map and this is what is on it.
+            return None
+
+    def _floor(self, floor, found, save, sf, index, db, cat, info, opts):
+        """One underground floor, written beside the surface map."""
+        from PIL import Image
+        from . import underground as ug
+
+        r = ug.UndergroundRenderer(floor, index, px=max(4, opts["px"]),
+                                   asset_db=db,
+                                   structures=opts["structures"])
+        saved = self._saved(sf, floor.world.id, info, cat, opts)
+        arr = r.render(hillshade=opts["shade"], progress=lambda a, b: self._check(),
+                       fields=opts["three_d"])
+        if saved is not None:
+            from . import creations
+            creations.paint(arr, r, saved.builds)
+        path = output.floor_path(opts["folder"], save.name, floor.label,
+                                 png=opts["png"], three_d=opts["three_d"])
+        lift = (None if opts["png"] else
+                output.lift_for(save, found, here=floor,
+                                three_d=opts["three_d"]))
+        if opts["three_d"]:
+            output.write_floor3d(path, r, floor, info, save, db=db,
+                                 objects=opts["objects"], floors=lift,
+                                 saved=saved)
+        else:
+            output.write_floor(path, Image.fromarray(arr), r, floor, info, save,
+                               png=opts["png"], floors=lift, saved=saved)
+        return path
 
     def _check(self):
         if self.stop.is_set():

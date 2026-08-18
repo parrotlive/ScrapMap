@@ -21,6 +21,20 @@ BASE_RGB = (98, 134, 0)        # 8 Grass -- shown where no weight is present
 OCEAN_RGB = (38, 86, 128)      # cells outside the generated world
 UNKNOWN_RGB = (150, 60, 150)   # a tile uuid the installed game does not have
 
+# Underground. Rock that was never dug is what most of a floor is, so it is the
+# page the workings are drawn on and wants to sit well back; the floor colour is
+# what a cut cave surface comes out as where its tile carries no ground
+# materials, which is nearly all of them.
+BEDROCK_RGB = (26, 24, 22)
+CAVE_FLOOR_RGB = (104, 94, 84)
+
+# How deep a floor runs is the one thing a plan of it cannot show by itself, so
+# depth is carried as a hue: cool at the bottom of the floor, warm at the top.
+# The pair is used as a tint at constant brightness, because brightness is
+# already saying which way the ground slopes.
+DEPTH_LOW_RGB = (96, 112, 140)
+DEPTH_HIGH_RGB = (150, 126, 96)
+
 # The world has a water plane at z = 0; anything below it reads as water.
 WATER_SHALLOW_RGB = (74, 141, 168)
 WATER_DEEP_RGB = (24, 61, 104)
