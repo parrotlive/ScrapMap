@@ -9,53 +9,32 @@ in your browser. Nothing to install, nothing to find, nothing to configure.
 
 ![](docs/gui.png)
 
-## New in 2.2 — the floors under it
+## New in 2.2 — what you built
 
-Scrap Mechanic has an underground now, and a world is no longer one map. The
-lift sits in the bar — **S 1 2 3 4 T 5 6 7**, the same buttons the lift in the
-game has — and every floor the world has been down to is a map of its own, made
-the same way the surface is: its own places, its own legend, its own search,
-names off until you ask for them, and its own 3D view.
-
-![](docs/underground3d.png)
-
-**A floor is a plan of the workings, not a picture of the rock.** Where a floor
-of the underground differs from the surface is the third axis: a cell is 64 m
-across and 256 m tall, and the same cell holds a tunnel at one height, a chamber
-at another and solid rock in between. So the map is drawn from the layings
-themselves — every cave, every pocket and every tunnel at the height it was dug
-— and whatever is highest at a point is what you see there, which is what
-looking down at a cave system gets you.
-
-Rock nobody has dug is not drawn at all. It is not a surface, and drawing it
-puts a lid over everything: flat, it is the dark the plan is drawn on, and in 3D
-it is cut away, so the chambers hang at their real depths with the tunnels
-running between them.
-
-The places are read off the tiles as they are on the surface, so a floor names
-its own: the mining hub, the underground stations, the scrapyard, the elevators,
-the cave chambers, and the gold, coralium and deeper deposits worth walking to.
-Floors the world has never been down to are in the lift and dead — the game only
-builds a floor when you take the lift to it, so the map has nothing to show for
-one you have not seen, and says so rather than making it up.
-
-**And what you left in it.** A map used to be the world as the generator made
-it, which is not the world you walked away from. Your car is in no tile, and
-neither is the base you welded together at the end of the road, or the wreck you
-dragged home. All of it is in the save, in tables the tool never used to open,
-and it is on the map now: every creation and every structure drawn block by
-block in the colours it was painted, along with the beds, the beacons, the quest
-markers, the lifts down and the spot you went down on.
-
-Yours is kept apart from the world's, because they are two different questions.
-The places legend has a heading for each, so ticking **Yours** on its own gives
-you what you built and nothing else; and in 3D your vehicles, your builds, your
-loose creations and what you welded down are four separate things that come and
-go one at a time, rather than sharing a switch with the generator's buildings.
+A map used to be the world as the generator made it, which is not the world you
+walked away from. Your car is in no tile, and neither is the base you welded
+together at the end of the road, or the wreck you dragged home. All of it is in
+the save, in tables the tool never used to open, and it is on the map now: every
+creation and every structure drawn block by block in the colours it was painted,
+along with the beds, the beacons and the quest markers.
 
 ![](docs/creations.png)
 
+**Yours is kept apart from the world's**, because they are two different
+questions. The places legend has a heading for each, so ticking **Yours** on its
+own gives you what you built and nothing else; and in 3D your vehicles, your
+builds, your loose creations and what you welded down are four separate things
+that come and go one at a time, rather than sharing a switch with the
+generator's buildings. The picture above is that switch doing its work: the
+world's own plants, rocks, wrecks and buildings unticked, and nothing left
+standing but what was built there.
+
 ![](docs/yours.png)
+
+**The value reader is finished.** A save writes its numbers as tagged values,
+and positions, rotations, colours and the game's own object handles were tags it
+did not know, so any part of a save holding one was skipped. Widths were
+measured against 4,824 real blobs from six saves.
 
 ## New in 2.1 — the places in it
 
